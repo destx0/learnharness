@@ -20,7 +20,7 @@ The mode exists because teach opens by probing (the learner answers questions be
 ## Owner decisions (2026-11-04)
 
 - **AI-written study guide**, not a graph summary and not imported notes.
-- **Dedicated document pane**, split view: document right, chat left; collapsible; full-screen overlay at narrow widths.
+- **Document-first main view** (amended 2026-11-12): the full study document owns the main area. The conversation is secondary — a floating panel over the document, closed by default and opened from the Chat chip. No split view.
 - **Living document you steer**: the agent writes, the learner steers through chat.
 - **Agent-only edits**: the learner never edits the pane directly.
 - **Starts with a summary of the topic's main ideas**, sized by the agent to the subject (no fixed word count); real explanation, not an outline.
@@ -92,10 +92,10 @@ Only teach sessions extract. `chat-handler` gates extraction on `(record.kind ??
 - Home mode switch: Teach / Practice / Read (book icon).
 - Sidebar: a third creation door, a fourth kind filter, a book icon on read rows.
 - Draft: `/chat/new?mode=read`, reading copy, no graph picker.
-- Session: Read tag instead of the phase chip; Document chip toggles the pane; no coverage ring; read composer placeholder.
-- `ReadPane` (`components/read-pane.tsx`): h-15 header matching the TopBar, title/fallback session title, section count + reading time, TOC rail at wide widths / sticky chip row at narrow, independently scrolling article, active-section tracking, empty/writing states, close.
+- Session: Read tag instead of the phase chip; Chat chip toggles the floating conversation panel; no coverage ring; read composer placeholder.
+- `ReadPane` (`components/read-pane.tsx`): full-main-area reading surface below the TopBar; h-15 header, title/fallback session title, section count + reading time, TOC rail at wide widths / sticky chip row at narrow, independently scrolling article, active-section tracking, empty/writing states. No close affordance — the document is the mode's main view.
 - `DocumentCard` (`components/artifacts/document-card.tsx`): the quiet transcript line for `edit_document`; `read_document` is invisible after settle.
-- Narrow width: the pane is a full-viewport overlay (`fixed inset-0`) with its own close button; wide: a `lg:w-[44%]` full-height sibling of the chat column.
+- Chat panel: bottom-right floating card (~30rem wide, up to ~34rem tall), a slim Conversation header with close, the ordinary transcript and composer inside. Hidden (but mounted) when closed, so drafts and scroll state survive toggling. It overlays the document at every width.
 
 ## Packaging
 
@@ -118,4 +118,4 @@ The prompt loader reads `src/agent/prompts/` at runtime, so `next.config.ts` exp
 - Interactive demos/SVG figures inside the document.
 - Graph extraction or a "save to graph" action.
 - Document version history or undo.
-- Resizable split ratio.
+- Resizable chat-panel dimensions.

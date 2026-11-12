@@ -34,8 +34,8 @@ export interface ReadPaneProps {
 	sessionTitle: string;
 	/** A document edit is currently being written (the live tool card). */
 	writing: boolean;
-	onClose: () => void;
-	/** Placement/width utilities (the Chat owns the split-vs-overlay rule). */
+	onClose?: () => void;
+	/** Placement utilities (the Chat owns the main-vs-overlay rule). */
 	className?: string;
 }
 
@@ -119,7 +119,7 @@ export function ReadDocumentView({
 	document: StudyDocument | null;
 	sessionTitle: string;
 	writing: boolean;
-	onClose: () => void;
+	onClose?: () => void;
 	className?: string;
 }) {
 	const sections = document?.sections ?? [];
@@ -172,7 +172,7 @@ export function ReadDocumentView({
 		<aside
 			data-testid="read-pane"
 			aria-label="Study document"
-			className={cn("flex min-h-0 flex-col border-l border-border bg-background", className)}
+			className={cn("flex min-h-0 flex-col bg-background", className)}
 		>
 			{/* The header aligns with the chat's TopBar (h-15) so the split's
 			    top edge is one line. Drag surface; the close button carves. */}
@@ -195,15 +195,17 @@ export function ReadDocumentView({
 						Writing…
 					</span>
 				)}
-				<button
-					type="button"
-					onClick={onClose}
-					aria-label="Close document"
-					data-testid="read-pane-close"
-					className="lh-no-drag flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-				>
-					<XIcon className="size-4" />
-				</button>
+				{onClose && (
+					<button
+						type="button"
+						onClick={onClose}
+						aria-label="Close document"
+						data-testid="read-pane-close"
+						className="lh-no-drag flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+					>
+						<XIcon className="size-4" />
+					</button>
+				)}
 			</header>
 
 			{sections.length === 0 ? (
@@ -272,7 +274,7 @@ export function ReadDocumentView({
 								</button>
 							))}
 						</div>
-						<article className="mx-auto w-full max-w-[44rem] px-6 py-8">
+						<article className="mx-auto w-full max-w-[48rem] px-8 py-10">
 							{sections.map((section, i) => (
 								<section
 									key={section.id}

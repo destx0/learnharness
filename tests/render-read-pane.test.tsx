@@ -24,13 +24,13 @@ const DOC: StudyDocument = {
 	updatedAt: "2026-11-04T12:00:00.000Z",
 };
 
-function render(doc: StudyDocument | null, writing = false) {
+function render(doc: StudyDocument | null, writing = false, onClose?: () => void) {
 	return renderToStaticMarkup(
 		<ReadDocumentView
 			document={doc}
 			sessionTitle="Linear algebra"
 			writing={writing}
-			onClose={() => {}}
+			onClose={onClose}
 		/>,
 	);
 }
@@ -46,7 +46,10 @@ describe("ReadDocumentView — the reading surface", () => {
 		assert.ok(html.includes("Vectors are the"));
 		assert.ok(html.includes("A map preserves addition and scaling."));
 		assert.ok(html.includes("2 sections"));
-		assert.ok(html.includes('data-testid="read-pane-close"'));
+		// The document is the main view: no close affordance unless the host
+		// explicitly asks for one.
+		assert.equal(html.includes('data-testid="read-pane-close"'), false);
+		assert.ok(render(DOC, false, () => {}).includes('data-testid="read-pane-close"'));
 	});
 
 	it("falls back to the session title before the agent names the document", () => {

@@ -68,7 +68,7 @@ import { PlanMarginalia, planExists } from "@/components/plan-window";
 import { ReadPane, documentWriteInFlight } from "@/components/read-pane";
 import { MermaidOverlay, SessionMermaidContext, type SessionImage } from "@/components/session-overlay";
 import { AbortTurnDialog, type AbortMode } from "@/components/abort-turn-dialog";
-import { ArrowRightIcon, BookOpenIcon, DumbbellIcon, MessageCircleQuestionIcon, WaypointsIcon } from "lucide-react";
+import { ArrowRightIcon, BookOpenIcon, DumbbellIcon, MessageCircleIcon, MessageCircleQuestionIcon, WaypointsIcon, XIcon } from "lucide-react";
 import type { PlanBlockData } from "@/src/core";
 import { QuestionDock } from "@/components/question-dock";
 import { PluginQuestionDock } from "./plugin-question-dock";
@@ -1242,12 +1242,13 @@ export function Chat({
 	// (invisible, clickable) button in the bottom-right whenever a question
 	// was pending with no plan yet (owner report, UI round 2026-10-01).
 	const hasPlan = useMemo(() => planExists(messages), [messages]);
-	/* THE READING PANE (read sessions, 2026-11-04): open by default — the
-	 * document is the mode's whole point — collapsible through the
-	 * Document chip. `writingDocument` keys on the live edit_document tool
+	/* THE READING PANE (read sessions, 2026-11-04; document-first layout,
+	 * 2026-11-12): the document IS the main view. The conversation is a
+	 * secondary floating panel, closed by default and toggled from the
+	 * Chat chip. `writingDocument` keys on the live edit_document tool
 	 * part, not the turn's busy flag: the agent may be answering a chat
 	 * question without touching the document. */
-	const [readPaneOpen, setReadPaneOpen] = useState(true);
+	const [readChatOpen, setReadChatOpen] = useState(false);
 	const writingDocument = useMemo(
 		() => kind === "read" && documentWriteInFlight(messages),
 		[kind, messages],
@@ -1730,29 +1731,28 @@ export function Chat({
 						</button>
 </Hint>
 					)}
-					{/* The reading-pane toggle (read sessions, 2026-11-04): the
-					    document is open by default; this chip is the reopen
-					    affordance after a collapse (and the overlay trigger at
-					    narrow widths). */}
+					{/* The conversation toggle (read sessions; document-first
+					    layout 2026-11-12): the document owns the main view; this
+					    chip opens the secondary floating chat panel. */}
 					{kind === "read" && (
-						<Hint label={readPaneOpen ? "Hide the document" : "Show the document"} side="bottom">
+						<Hint label={readChatOpen ? "Hide the conversation" : "Open the conversation"} side="bottom">
 							<button
 								type="button"
-								data-testid="document-chip"
-								aria-pressed={readPaneOpen}
+								data-testid="chat-chip"
+								aria-pressed={readChatOpen}
 								onClick={(e) => {
 									blurAfterPointerClick(e);
-									setReadPaneOpen((open) => !open);
+									setReadChatOpen((open) => !open);
 								}}
 								className={
 									"lh-no-drag flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium uppercase tracking-wide transition-colors " +
-									(readPaneOpen
+									(readChatOpen
 										? "border-border bg-accent text-foreground"
 										: "border-border/80 text-muted-foreground hover:border-border hover:text-foreground")
 								}
 							>
-								<BookOpenIcon className="size-3.5" aria-hidden />
-								Document
+								<MessageCircleIcon className="size-3.5" aria-hidden />
+								Chat
 							</button>
 						</Hint>
 					)}
@@ -1794,6 +1794,44 @@ export function Chat({
 
 				<SessionFind scopeRef={sessionFindScopeRef} scrollContextRef={scrollContextRef} />
 				<div ref={sessionFindScopeRef} className="relative flex min-h-0 flex-1">
+				{/* DOCUMENT-FIRST (read sessions, 2026-11-12): the whole study
+				    document is the main view, under the shared TopBar. The
+				    conversation floats above it as a secondary panel. */}
+				{kind === "read" && (
+					<ReadPane
+						chatId={chatId}
+						initialDocument={initialDocument}
+						sessionTitle={titleText}
+						writing={writingDocument}
+						className="absolute inset-0 z-0"
+					/>
+				)}
+				<div
+					className={
+						kind === "read"
+							? cn(
+									"absolute bottom-3 right-3 z-30 flex h-[min(34rem,calc(100%_-_1.5rem))] w-[min(30rem,calc(100%_-_1.5rem))] flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl",
+									!readChatOpen && "hidden",
+								)
+							: "contents"
+					}
+				>
+					{kind === "read" && (
+						<div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
+							<span className="font-ui text-[10px] font-medium uppercase tracking-widest text-muted-foreground/80">
+								Conversation
+							</span>
+							<button
+								type="button"
+								onClick={() => setReadChatOpen(false)}
+								aria-label="Close conversation"
+								data-testid="read-chat-close"
+								className="lh-no-drag flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+							>
+								<XIcon className="size-3.5" />
+							</button>
+						</div>
+					)}
 				<Conversation className="h-full min-w-0 flex-1" initial="instant" contextRef={scrollContextRef}>
 					<SessionMessageNavigation />
 					<TranscriptElementReporter onElement={setTranscriptElement} />
@@ -2246,6 +2284,7 @@ export function Chat({
 						onCurrentStep={goToCurrentSideStep}
 					/>
 				)}
+				</div>
 
 				{/* The session-scoped focuses (chrome-melt wave, 2026-09-19): mounted
 				    INSIDE the session area — absolute inset-0 siblings of the scroller,
@@ -2282,20 +2321,6 @@ export function Chat({
 				</div>
 			</div>
 
-			{/* THE READING PANE (read sessions, 2026-11-04): a full-height
-			    sibling of the chat column at wide widths (the split view);
-			    a full-viewport overlay below lg, where there is no room for
-			    two readable columns. The pane owns its own scroll. */}
-			{kind === "read" && readPaneOpen && (
-				<ReadPane
-					chatId={chatId}
-					initialDocument={initialDocument}
-					sessionTitle={titleText}
-					writing={writingDocument}
-					onClose={() => setReadPaneOpen(false)}
-					className="fixed inset-0 z-40 lg:static lg:z-auto lg:w-[44%] lg:min-w-[22rem] lg:max-w-[52rem] lg:shrink-0"
-				/>
-			)}
 		</div>
 		</CitationActionsContext.Provider>
 		</JobsContext.Provider>

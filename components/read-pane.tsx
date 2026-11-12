@@ -924,7 +924,7 @@ function ReadArticle({
 										type="button"
 										onClick={() => onRemoveRelated(document.id, link.documentId, link.sectionId)}
 										aria-label="Remove related link"
-										className="flex w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/40 opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
+										className="flex w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/40 transition-colors hover:bg-accent hover:text-foreground"
 									>
 										<XIcon className="size-3.5" />
 									</button>

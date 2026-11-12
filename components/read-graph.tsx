@@ -118,6 +118,7 @@ export function buildReadGraph(documents: readonly StudyDocument[]): ReadGraphDa
 			if (link.sectionId && !target.sections.some((section) => section.id === link.sectionId)) continue;
 			const from = readGraphNodeId(doc.id);
 			const to = readGraphNodeId(target.id, link.sectionId);
+			if (from === to) continue;
 			const key = `${from}\u0000${to}`;
 			if (seenRelated.has(key)) continue;
 			seenRelated.add(key);

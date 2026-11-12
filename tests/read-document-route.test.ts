@@ -78,6 +78,40 @@ describe("GET /api/chats/[id]/document", () => {
 		assert.equal(missing.status, 400);
 	});
 
+	it("settles a stale writing child on read but leaves a fresh one alone", async () => {
+		const chat = chatStore.createChat("crash recovery", "read");
+		chatStore.saveDocument(chat.id, {
+			id: "root",
+			title: "Root",
+			sections: [{ id: "maps", heading: "Maps", body: "Body." }],
+			revision: 1,
+			updatedAt: new Date().toISOString(),
+		});
+		const stale = {
+			id: "doc_stale",
+			title: "Stale topic",
+			sections: [],
+			revision: 0,
+			updatedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+			parent: { documentId: "root", sectionId: "maps", topicId: "stale" },
+			status: "writing" as const,
+		};
+		chatStore.saveDocument(chat.id, stale);
+		const res = await get(chat.id);
+		const body = (await res.json()) as { documents?: Array<{ id: string; status?: string }> };
+		assert.equal(body.documents?.[0]?.status, "failed");
+		const fresh = {
+			...stale,
+			id: "doc_fresh",
+			updatedAt: new Date().toISOString(),
+			parent: { documentId: "root", sectionId: "maps", topicId: "fresh" },
+		};
+		chatStore.saveDocument(chat.id, fresh);
+		const res2 = await get(chat.id);
+		const body2 = (await res2.json()) as { documents?: Array<{ id: string; status?: string }> };
+		assert.equal(body2.documents?.find((doc) => doc.id === "doc_fresh")?.status, "writing");
+	});
+
 	it("validates suggestion and deeper targets before starting a turn", async () => {
 		const chat = chatStore.createChat("validation", "read");
 		chatStore.saveDocument(chat.id, {

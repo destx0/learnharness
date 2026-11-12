@@ -1,4 +1,4 @@
-import { handleChatInput, stores } from "@/src/server";
+import { handleChatInput, isTurnRunning, stores } from "@/src/server";
 import {
 	createChildStudyDocument,
 	emit,
@@ -12,6 +12,18 @@ import {
 
 function childState(record: ChatRecord | null, childId: string): StudyDocument | null {
 	return record ? studyDocumentById(record, childId) : null;
+}
+
+/** The turn never started (busy/refused): never leave a phantom writer. */
+function failPendingChild(chatId: string, child: StudyDocument): void {
+	const current = childState(stores.chatStore.getChat(chatId), child.id) ?? child;
+	const failed: StudyDocument = {
+		...current,
+		status: current.sections.length > 0 ? "ready" : "failed",
+		updatedAt: new Date().toISOString(),
+	};
+	stores.chatStore.saveDocument(chatId, failed);
+	emit("document-changed", { chatId, documentId: failed.id });
 }
 
 /** A deeper topic was chosen. Create (or reopen) the child document, make
@@ -35,6 +47,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 	const parent = studyDocumentById(record, documentId);
 	const found = parent ? studyDocumentTopic(parent, sectionId, topicId) : null;
 	if (!parent || !found) return Response.json({ error: "No such deeper-topic suggestion" }, { status: 400 });
+	if (isTurnRunning(id)) return Response.json({ error: "A turn is already running for this session" }, { status: 409 });
 
 	let child = studyDocumentChildForTopic(record, documentId, sectionId, topicId);
 	if (child) {
@@ -64,24 +77,23 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 		emit("document-changed", { chatId: id, documentId: child.id });
 	}
 
-	const response = await handleChatInput(id, {
+	// Immediate switch (owner 2026-11-12): return the pending child before
+	// the turn's admission/compaction awaits finish. The turn runs as the
+	// usual background object; a failed start marks the child failed and
+	// the pane's event refetch shows Retry.
+	const pending = child;
+	void handleChatInput(id, {
 		type: "go-deeper",
 		documentId: parent.id,
 		sectionId,
 		topicId,
-		childDocumentId: child.id,
+		childDocumentId: pending.id,
+	}).then((response) => {
+		if (!response.ok) failPendingChild(id, pending);
+	}).catch((err) => {
+		console.error(`[read ${id}] deeper turn failed to start:`, err);
+		failPendingChild(id, pending);
 	});
-	if (!response.ok) {
-		// The turn never started (busy/refused): never leave a phantom writer.
-		const current = childState(stores.chatStore.getChat(id), child.id) ?? child;
-		const failed: StudyDocument = {
-			...current,
-			status: current.sections.length > 0 ? "ready" : "failed",
-			updatedAt: new Date().toISOString(),
-		};
-		stores.chatStore.saveDocument(id, failed);
-		emit("document-changed", { chatId: id, documentId: failed.id });
-		return response;
-	}
-	return Response.json({ childDocument: childState(stores.chatStore.getChat(id), child.id), started: true });
+
+	return Response.json({ childDocument: childState(stores.chatStore.getChat(id), pending.id) ?? pending, started: true });
 }

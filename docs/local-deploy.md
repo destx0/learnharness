@@ -68,6 +68,36 @@ journalctl --user -u learnharness -f
 systemctl --user restart learnharness
 ```
 
+## Public tunnel (`lh.pugg.in`)
+
+The app is also reachable at `https://lh.pugg.in` through the remote-managed
+Cloudflare tunnel (root `cloudflared.service`), which forwards to
+`http://127.0.0.1:3100`.
+
+Browser-only mode gates every `/api/*` request on the `Host` header
+(`src/server/desktop-access.ts`): only `localhost`, `*.localhost`, and IP
+literals are accepted unless the name is listed in `LH_ALLOWED_HOSTS`. That is
+why the unit sets:
+
+```
+Environment=LH_ALLOWED_HOSTS=lh.pugg.in
+```
+
+Without it the page HTML and JS load fine but every API call returns
+`403 {"error":"This host name is not allowed…"}` — the UI then renders empty and
+throws `Cannot read properties of undefined (reading 'map')`. If you add another
+tunnel hostname, append it to that comma-separated list and restart the unit.
+
+Writes additionally require `Origin`/`Sec-Fetch-Site` to match the request
+origin; cloudflared forwards `X-Forwarded-Proto: https`, so `https://lh.pugg.in`
+matches itself. A proxy that strips that header would turn every POST into
+`403 Cross-site requests to the LearnHarness API are not allowed`.
+
+There is no authentication in browser-only mode: anyone who reaches the host can
+read chats, settings, and the knowledge graph, and can spend on your provider
+keys (key values stay masked at `/api/keys`). Put Cloudflare Access (or another
+gate) in front of the hostname before sharing it.
+
 ## Gotchas
 
 - The unit pins `ExecStart` to `/home/omu/.local/share/mise/installs/node/24.22.0/bin/node`

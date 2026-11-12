@@ -31,6 +31,18 @@ The reader should be able to read it cold. That is the whole standard.
 - **Keep the TOC honest.** If a section's meaning changes, its heading should change with it. If a section is no longer needed, remove it rather than leaving a stub.
 - **Do not rewrite what was not asked about.** A revision should leave the rest of the document recognizable.
 
+## Going deeper
+
+- A deeper document continues from its parent chapter, not from zero. State
+  the inherited result in a line, then take the next step.
+- Choose the depth the direction asks for. A mechanism may need a derivation;
+  a comparison may need a table. Do not turn every child into a survey.
+- The child's own chapters are the same reading surface: short headings,
+  self-contained explanations, and room for its own deeper directions later.
+- Suggestions are a reading path, not a syllabus. Offer directions the
+  learner could actually choose between, with a concrete reason each is
+  worth the detour.
+
 ## The chat around it
 
 - One line to say what changed: "Expanded the section on gradients and added a worked example." Then stop.

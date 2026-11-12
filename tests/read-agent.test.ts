@@ -43,7 +43,17 @@ function fakeStore(initial: ChatRecord) {
 	const store = {
 		getChat: (id: string) => (id === current.id ? current : null),
 		saveDocument: (_id: string, document: NonNullable<ChatRecord["document"]>) => {
-			current = { ...current, document };
+			if (document.id === "root") current = { ...current, document };
+			else {
+				const documents = [...(current.documents ?? [])];
+				const at = documents.findIndex((doc) => doc.id === document.id);
+				if (at >= 0) documents[at] = document;
+				else documents.push(document);
+				current = { ...current, documents };
+			}
+		},
+		saveReadingDocumentId: (_id: string, readingDocumentId: string) => {
+			current = { ...current, readingDocumentId };
 		},
 	} as unknown as ChatStore;
 	return { store, get: () => current };
@@ -75,12 +85,14 @@ describe("the read agent's prompt", () => {
 		// Teaching apparatus stays out.
 		assert.doesNotMatch(prompt, /probe_done/);
 		assert.doesNotMatch(prompt, /plan_init/);
+		assert.match(prompt, /deeper/i);
 	});
 
 	it("is a discoverable prompt segment set (overrides can target it)", () => {
 		const paths = allSegmentPaths();
 		assert.ok(paths.includes("read/00-base.md"));
 		assert.ok(paths.includes("read/10-doctrine.md"));
+		assert.ok(paths.includes("read/20-deeper.md"));
 		assert.ok(paths.includes("shared/10-voice.md"));
 	});
 });
@@ -93,11 +105,13 @@ describe("the read agent's tool registry", () => {
 			"edit_document",
 			"find",
 			"grep",
+			"list_documents",
 			"ls",
 			"pdf",
 			"read",
 			"read_document",
 			"research",
+			"suggest_deeper",
 		]);
 	});
 
@@ -121,6 +135,63 @@ describe("the read agent's tool registry", () => {
 		const readBody = (read.details as { sections?: Array<{ id: string; body: string }> }).sections?.[0];
 		assert.equal(readBody?.id, "maps");
 		assert.match(readBody?.body ?? "", /preserve addition/);
+	});
+
+	it("suggests deeper directions for one chapter and lists the tree", async () => {
+		const { store, get } = fakeStore(record());
+		const tools = toolsOf(store);
+		await tools[EDIT_DOCUMENT_TOOL]!.execute("call_1", {
+			title: "Linear algebra",
+			sections: [{ id: "maps", heading: "Linear maps", body: "A map preserves structure." }],
+		} as never);
+		const suggested = await tools.suggest_deeper!.execute("call_2", {
+			documentId: "root",
+			sectionId: "maps",
+			suggestions: [
+				{ id: "eigen", heading: "Eigenvectors", blurb: "Directions a map leaves fixed." },
+			],
+		} as never);
+		assert.equal((suggested.details as { ok?: boolean }).ok, true);
+		assert.equal(get().document?.sections[0]?.suggestions?.[0]?.id, "eigen");
+		const listed = await tools.list_documents!.execute("call_3", {} as never);
+		const details = listed.details as { tree?: string; documents?: Array<{ id: string }> };
+		assert.match(details.tree ?? "", /\[root\] Linear algebra/);
+		assert.match(details.tree ?? "", /eigen \(Eigenvectors\)/);
+		assert.deepEqual(details.documents?.map((doc) => doc.id), ["root"]);
+	});
+
+	it("targets a child document by id and leaves the root alone", async () => {
+		const { store, get } = fakeStore(record());
+		const tools = toolsOf(store);
+		await tools[EDIT_DOCUMENT_TOOL]!.execute("call_1", {
+			title: "Linear algebra",
+			sections: [{ id: "maps", heading: "Linear maps", body: "A map preserves structure." }],
+		} as never);
+		const suggested = await tools.suggest_deeper!.execute("call_2", {
+			documentId: "root",
+			sectionId: "maps",
+			suggestions: [{ id: "eigen", heading: "Eigenvectors", blurb: "Fixed directions." }],
+		} as never);
+		assert.equal((suggested.details as { ok?: boolean }).ok, true);
+		const { createChildStudyDocument } = await import("../src/core/study-document.ts");
+		const current = get();
+		const child = createChildStudyDocument(
+			{ document: current.document, documents: current.documents ?? [] },
+			"root",
+			"maps",
+			"eigen",
+			"doc_eigen",
+		);
+		store.saveDocument("c_read", child);
+		store.saveReadingDocumentId("c_read", "doc_eigen");
+		const edited = await tools[EDIT_DOCUMENT_TOOL]!.execute("call_3", {
+			title: "Eigenvectors",
+			sections: [{ id: "idea", heading: "The idea", body: "A vector that only scales." }],
+		} as never);
+		assert.equal((edited.details as { ok?: boolean; documentId?: string }).documentId, "doc_eigen");
+		assert.equal(get().document?.sections.length, 1);
+		assert.equal(get().document?.sections[0]?.id, "maps");
+		assert.equal(get().documents?.[0]?.title, "Eigenvectors");
 	});
 
 	it("returns validation problems to the model without writing", async () => {

@@ -106,9 +106,12 @@ for (const asset of [
 	path.join("public", "plugin-loader.js"),
 	path.join("src", "agent", "system-prompt.md"),
 	path.join("src", "agent", "prompts", "teacher", "20-teaching.md"),
-	// Read sessions (2026-11-04): the read agent's own base + doctrine must
-	// ship too — the prompt loader reads the directory at runtime.
+	// Read sessions (2026-11-04; deeper tree 2026-11-12): the read agent's
+	// own base + doctrine + deeper mechanics must ship too — the prompt
+	// loader reads the directory at runtime.
 	path.join("src", "agent", "prompts", "read", "00-base.md"),
+	path.join("src", "agent", "prompts", "read", "10-doctrine.md"),
+	path.join("src", "agent", "prompts", "read", "20-deeper.md"),
 	path.join("src", "agent", "prompts", "side-chat", "00-base.md"),
 	path.join("src", "agent", "prompts", "side-chat", "90-style.md"),
 ]) {

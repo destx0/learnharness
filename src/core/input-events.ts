@@ -32,6 +32,7 @@ import type { QuestionAnswerData } from "./question-core.ts";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { validatePluginSubmissionImageArray, validatePluginSubmissionImages, type PluginSubmissionImages, type PluginSubmissionOccurrence } from "./plugin-submissions.ts";
 import type { LhMessage } from "./native-messages.ts";
+import type { StudyDocument } from "./contracts/chat.ts";
 import {
 	activeProblemOf,
 	activeProblemOccurrenceOf,
@@ -41,6 +42,9 @@ import {
 	newAnswerResult,
 	newNextMessage,
 	newProblemDismissedMarker,
+	newReadContextMessage,
+	newReadDeeperMessage,
+	newReadSuggestMessage,
 	newThinkingMessage,
 	newUserMessage,
 	newMessageId,
@@ -48,6 +52,7 @@ import {
 	pluginQuestionCallsOf,
 	pendingProblemDismissalOf,
 } from "./native-messages.ts";
+import { studyDocumentById, studyDocumentChildForTopic, studyDocumentList, studyDocumentTopic } from "./study-document.ts";
 import { QUESTION_TOOLS, toolQuestionKind } from "./pending.ts";
 import { isPluginQuestionJson, type JsonValue, type PluginQuestionOccurrence } from "./plugin-questions.ts";
 import { preparePluginProblemSubmissionImages, type PluginProblemSubmissionImages } from "./plugin-submissions.ts";
@@ -76,7 +81,13 @@ export type ChatInput =
 	 *  explicit go-ahead during the between-problems pause — the Next
 	 *  chip or Enter on an empty composer. Practice sessions only, and
 	 *  only with nothing active (mid-problem input rides the dock). */
-	| { type: "next" };
+	| { type: "next" }
+	/** Read mode's "Go deeper" click: ask the agent for directions under
+	 *  one chapter. The marker carries exact ids; no visible user bubble. */
+	| { type: "suggest-deeper"; documentId: string; sectionId: string }
+	/** Read mode's topic choice: the server has already created the
+	 *  pending child document; this starts the writing turn. */
+	| { type: "go-deeper"; documentId: string; sectionId: string; topicId: string; childDocumentId: string };
 
 /** A wake-pipeline steer delivery — same turn composition, server-origin.
  *  Wave C (2026-09-26): the idle wake carries EVERY queued marker as its
@@ -282,6 +293,18 @@ export function parseChatInput(input: unknown): ChatInput {
 		}
 		case "next":
 			return { type: "next" };
+		case "suggest-deeper": {
+			if (typeof i.documentId !== "string" || !i.documentId) throw new ChatInputError("suggest-deeper requires documentId");
+			if (typeof i.sectionId !== "string" || !i.sectionId) throw new ChatInputError("suggest-deeper requires sectionId");
+			return { type: "suggest-deeper", documentId: i.documentId, sectionId: i.sectionId };
+		}
+		case "go-deeper": {
+			if (typeof i.documentId !== "string" || !i.documentId) throw new ChatInputError("go-deeper requires documentId");
+			if (typeof i.sectionId !== "string" || !i.sectionId) throw new ChatInputError("go-deeper requires sectionId");
+			if (typeof i.topicId !== "string" || !i.topicId) throw new ChatInputError("go-deeper requires topicId");
+			if (typeof i.childDocumentId !== "string" || !i.childDocumentId) throw new ChatInputError("go-deeper requires childDocumentId");
+			return { type: "go-deeper", documentId: i.documentId, sectionId: i.sectionId, topicId: i.topicId, childDocumentId: i.childDocumentId };
+		}
 		default:
 			throw new ChatInputError(`unknown input type: ${String(i.type)}`);
 	}
@@ -296,8 +319,40 @@ export function parseChatInput(input: unknown): ChatInput {
  * else 400s honestly instead of silently interrupting a question or
  * double-answering.
  */
+/** The chat steers the document the learner is reading. Append one
+ *  UI-hidden context marker when the active document changed since the
+ *  last one (or after compaction, whose cut may hide it). */
+function readContextAppends(record: {
+	messages: LhMessage[];
+	kind?: string;
+	document?: StudyDocument;
+	documents?: StudyDocument[];
+	readingDocumentId?: string;
+}): LhMessage[] {
+	if (record.kind !== "read" || !record.readingDocumentId) return [];
+	const document = studyDocumentById(record, record.readingDocumentId);
+	if (!document) return [];
+	for (let i = record.messages.length - 1; i >= 0; i--) {
+		const message = record.messages[i]!;
+		if (message.role !== "custom") continue;
+		if (message.customType === "compaction") break;
+		if (message.customType === "read-context") {
+			const details = message.details as { documentId?: unknown } | null;
+			if (details?.documentId === record.readingDocumentId) return [];
+			break;
+		}
+	}
+	return [newReadContextMessage(record.readingDocumentId, document.title)];
+}
+
 export function inputAppends(
-	record: { messages: LhMessage[]; kind?: string },
+	record: {
+		messages: LhMessage[];
+		kind?: string;
+		document?: StudyDocument;
+		documents?: StudyDocument[];
+		readingDocumentId?: string;
+	},
 	input: ChatInput,
 ): LhMessage[] {
 	assertPluginQuestionInputAllowed(record.messages, input);
@@ -308,7 +363,7 @@ export function inputAppends(
 		case "plugin-question-answer":
 			throw new ChatInputError("Plugin question answers require canonical server validation");
 		case "text":
-			return [...dismissalConclusion(record), newUserMessage(input.text, input.images)];
+			return [...dismissalConclusion(record), ...readContextAppends(record), newUserMessage(input.text, input.images)];
 		case "answer": {
 			const pending = danglingQuestionOf(record.messages);
 			if (!pending || pending.toolCallId !== input.toolCallId) {
@@ -344,6 +399,41 @@ export function inputAppends(
 				throw new ChatInputError("next input requires no active problem");
 			}
 			return [...dismissalConclusion(record), newNextMessage()];
+		}
+		case "suggest-deeper": {
+			if (record.kind !== "read") throw new ChatInputError("suggest-deeper input is a reading-session affordance");
+			const document = studyDocumentById(record, input.documentId);
+			const section = document?.sections.find((s) => s.id === input.sectionId);
+			if (!document || !section) {
+				throw new ChatInputError(
+					`suggest-deeper targets no chapter. Current ids: ${studyDocumentList(record).map((doc) => doc.id).join(", ") || "(none)"}`,
+				);
+			}
+			return [newReadSuggestMessage({
+				documentId: document.id,
+				documentTitle: document.title,
+				sectionId: section.id,
+				sectionHeading: section.heading,
+			})];
+		}
+		case "go-deeper": {
+			if (record.kind !== "read") throw new ChatInputError("go-deeper input is a reading-session affordance");
+			const document = studyDocumentById(record, input.documentId);
+			const found = document ? studyDocumentTopic(document, input.sectionId, input.topicId) : null;
+			const child = studyDocumentChildForTopic(record, input.documentId, input.sectionId, input.topicId);
+			if (!document || !found || !child || child.id !== input.childDocumentId) {
+				throw new ChatInputError("go-deeper targets no current suggestion or pending child document");
+			}
+			return [newReadDeeperMessage({
+				documentId: document.id,
+				documentTitle: document.title,
+				sectionId: found.section.id,
+				sectionHeading: found.section.heading,
+				topicId: found.topic.id,
+				topicHeading: found.topic.heading,
+				topicBlurb: found.topic.blurb,
+				childDocumentId: child.id,
+			})];
 		}
 	}
 }

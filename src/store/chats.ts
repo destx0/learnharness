@@ -15,6 +15,7 @@ import { emit } from "../core/events.ts";
 import type { ChatStore } from "../core/ports.ts";
 import type { ChatRecord, ChatSettings, ChatSummary, ExtractionRunUsage, ImageSnapshot, PlanTree, SideChatThread, StudyDocument, TurnUsage } from "../core/contracts.ts";
 import { CURRENT_CHAT_VERSION } from "../core/contracts.ts";
+import { STUDY_ROOT_DOCUMENT_ID } from "../core/study-document.ts";
 import type { LhMessage } from "../core/native-messages.ts";
 import { activeProblemOf, danglingQuestionOf } from "../core/native-messages.ts";
 import { phaseAt3Lh } from "../core/phases.ts";
@@ -75,7 +76,12 @@ function getChat(id: string): ChatRecord | null {
 		console.error(`[chat ${id}] record stamped with schema version ${v} > ${CURRENT_CHAT_VERSION} — this app build is older; refusing to read it`);
 		return null;
 	}
-	return parsed as ChatRecord;
+	const record = parsed as ChatRecord;
+	// Pre-deeper records stored the root document without an id. The id is
+	// structural now (the tree and tool targeting key on it), so normalize
+	// in memory; the next write stamps it.
+	if (record.document && !record.document.id) record.document.id = STUDY_ROOT_DOCUMENT_ID;
+	return record;
 }
 
 function listChats(): ChatSummary[] {
@@ -86,7 +92,7 @@ function listChats(): ChatSummary[] {
 			.filter((f) => f.endsWith(".json"))
 			.map((f) => getChat(f.slice(0, -5)))
 			.filter((r): r is ChatRecord => r !== null)
-			.map(({ messages, tree, document, turns, extractions, imageSnapshots: _imageSnapshots, sideChats: _sideChats, ...summary }) => {
+			.map(({ messages, tree, document, documents, readingDocumentId, turns, extractions, imageSnapshots: _imageSnapshots, sideChats: _sideChats, ...summary }) => {
 				// Per-record isolation (Wave B): a record whose messages fail the
 				// projection (e.g. pre-Wave-B UIMessage-format scratch — the
 				// zero-back-compat wipe makes these "corrupt") must not blank the
@@ -230,11 +236,32 @@ function saveTree(id: string, tree: PlanTree): void {
 
 /** Persist the living study document (the read agent's document tool). Like
  *  saveTree, an edit is not a separate conversation activity — the turn's
- *  saveMessages carries the update — so updatedAt deliberately stays put. */
+ *  saveMessages carries the update — so updatedAt deliberately stays put.
+ *  The root lives in `document`; deeper documents upsert in `documents`. */
 function saveDocument(id: string, document: StudyDocument): void {
 	const record = getChat(id);
 	if (!record) throw new Error(`Chat not found: ${id}`);
-	record.document = document;
+	if (document.id === STUDY_ROOT_DOCUMENT_ID) {
+		record.document = document;
+	} else {
+		const documents = [...(record.documents ?? [])];
+		const at = documents.findIndex((doc) => doc.id === document.id);
+		if (at >= 0) documents[at] = document;
+		else documents.push(document);
+		record.documents = documents;
+	}
+	writeChat(record);
+}
+
+/** View state for chat steering (read sessions): which document the learner
+ *  has open. Like saveTree/saveDocument, not conversation activity. */
+function saveReadingDocumentId(id: string, documentId: string): void {
+	const record = getChat(id);
+	if (!record) throw new Error(`Chat not found: ${id}`);
+	if (documentId !== STUDY_ROOT_DOCUMENT_ID && !record.documents?.some((doc) => doc.id === documentId)) {
+		throw new Error(`No study document with id "${documentId}"`);
+	}
+	record.readingDocumentId = documentId;
 	writeChat(record);
 }
 
@@ -261,6 +288,7 @@ export const chatStore: ChatStore = {
 	saveImageSnapshot,
 	saveTree,
 	saveDocument,
+	saveReadingDocumentId,
 	saveSettings,
 	renameChat,
 	deleteChat,

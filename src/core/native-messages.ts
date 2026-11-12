@@ -86,7 +86,10 @@ export interface LhMarkerMessage {
 		| "problem-dismissed"
 		| "compaction"
 		| "side-question"
-		| "side-question-told";
+		| "side-question-told"
+		| "read-context"
+		| "read-suggest"
+		| "read-deeper";
 	/** The model-facing text ("" for plan blocks — UI-only). */
 	content: string;
 	display: boolean;
@@ -402,6 +405,65 @@ export function newProblemDismissedMarker(problemCallId: string): LhMarkerMessag
 		content: "",
 		display: true,
 		details: { problemCallId },
+		timestamp: Date.now(),
+	};
+}
+
+// ─── read-session navigation markers (deeper tree, 2026-11-12) ─────────────
+//
+// The learner's reads and clicks are session context, not chat speech:
+// UI-hidden markers carrying exact ids. The model sees their content; the
+// transcript drops them (core/view.ts has no projection for these types).
+
+export interface ReadSuggestDetails {
+	documentId: string;
+	documentTitle: string;
+	sectionId: string;
+	sectionHeading: string;
+}
+
+export interface ReadDeeperDetails extends ReadSuggestDetails {
+	topicId: string;
+	topicHeading: string;
+	topicBlurb: string;
+	childDocumentId: string;
+}
+
+/** Which document the learner is reading, for ordinary chat steering. */
+export function newReadContextMessage(documentId: string, title: string): LhMarkerMessage {
+	return {
+		id: newMessageId(),
+		role: "custom",
+		customType: "read-context",
+		content: `[Session context] The learner is now reading the study document "${title}" (${documentId}). Unless they explicitly name another document, edit and discuss this one; call read_document with its id when you need the text.`,
+		display: false,
+		details: { documentId, title },
+		timestamp: Date.now(),
+	};
+}
+
+/** "Go deeper" pressed: suggest directions, do not write a child yet. */
+export function newReadSuggestMessage(details: ReadSuggestDetails): LhMarkerMessage {
+	return {
+		id: newMessageId(),
+		role: "custom",
+		customType: "read-suggest",
+		content: `[Session context] The learner asked for deeper-topic directions for the chapter "${details.sectionHeading}" (${details.sectionId}) in the study document "${details.documentTitle}" (${details.documentId}). Read that chapter and call suggest_deeper with 2–4 genuinely deeper directions. Do not write a child document yet — the learner picks a direction first.`,
+		display: false,
+		details,
+		timestamp: Date.now(),
+	};
+}
+
+/** A suggestion was chosen: the server already created the pending child. */
+export function newReadDeeperMessage(details: ReadDeeperDetails): LhMarkerMessage {
+	return {
+		id: newMessageId(),
+		role: "custom",
+		customType: "read-deeper",
+		content: `[Session context] The learner chose the deeper direction "${details.topicHeading}" from the chapter "${details.sectionHeading}" (${details.sectionId}) in "${details.documentTitle}" (${details.documentId}). ${details.topicBlurb ? `The direction: ${details.topicBlurb} ` : ""}Write its child study document now with edit_document and documentId="${details.childDocumentId}" — one level deeper than the parent chapter, not a repeat of it. Give it real sections, starting from what the reader already learned. Add related links to existing documents when genuinely related from list_documents.`,
+		display: false,
+		details,
 		timestamp: Date.now(),
 	};
 }
@@ -989,8 +1051,8 @@ export function nativeInputCause(message: AgentMessage, history: readonly AgentM
 	if (message.role === "system" || message.role === "assistant") return "neutral";
 	if (message.role === "custom") {
 		if (["probe-handoff", "subagent-steer", "subagent-abort"].includes(message.customType)) return "automatic";
-		if (["practice-thinking", "plugin-problem-submission", "practice-next"].includes(message.customType)) return "learner";
-		return ["graph-context", "plan-block", "problem-dismissed", "compaction", "side-question", "side-question-told"].includes(message.customType) ? "neutral" : "unrecognizable";
+		if (["practice-thinking", "plugin-problem-submission", "practice-next", "read-suggest", "read-deeper"].includes(message.customType)) return "learner";
+		return ["graph-context", "plan-block", "problem-dismissed", "compaction", "side-question", "side-question-told", "read-context"].includes(message.customType) ? "neutral" : "unrecognizable";
 	}
 	if (message.role === "toolResult") {
 		const pluginAnswer = readPluginQuestionAnswer(message.details);
@@ -1081,12 +1143,12 @@ export function needsContinuation(record: readonly LhMessage[]): boolean {
 				!!pluginProblemForCall(messages, { messageId: owner.id, contentIndex, toolCallId: call.id, toolName: call.name }))),
 	);
 	if (posedProblem) return false;
-	// READ SESSIONS (2026-11-04): document reads/writes are internal work,
-	// not a dispatch the agent owes a continuation for. Without this a turn
-	// ending right after edit_document/read_document would wake a phantom
-	// continuation turn on reload.
+	// READ SESSIONS (2026-11-04; deeper 2026-11-12): document reads/writes
+	// and suggestion/list work are internal, not a dispatch the agent owes
+	// a continuation for. Without this a turn ending right after one would
+	// wake a phantom continuation turn on reload.
 	const internalDocumentWork = results.some(
-		(m) => (m.toolName === EDIT_DOCUMENT_TOOL || m.toolName === READ_DOCUMENT_TOOL) && !m.isError,
+		(m) => (m.toolName === EDIT_DOCUMENT_TOOL || m.toolName === READ_DOCUMENT_TOOL || m.toolName === "suggest_deeper" || m.toolName === "list_documents") && !m.isError,
 	);
 	if (internalDocumentWork) return false;
 	const answered = new Set(results.map((m) => m.toolCallId));

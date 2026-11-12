@@ -57,6 +57,7 @@ export interface ServerEvents {
     };
     "document-changed": {
         chatId: string;
+        documentId?: string;
     };
     "compaction-changed": {
         chatId: string;
@@ -90,6 +91,7 @@ export interface ServerEvents {
 - ["record-changed".chatId](#serverevents-record-changedchatid)
 - ["document-changed"](#serverevents-document-changed)
 - ["document-changed".chatId](#serverevents-document-changedchatid)
+- ["document-changed".documentId](#serverevents-document-changeddocumentid)
 - ["compaction-changed"](#serverevents-compaction-changed)
 - ["compaction-changed".chatId](#serverevents-compaction-changedchatid)
 - ["compaction-changed".running](#serverevents-compaction-changedrunning)
@@ -213,6 +215,7 @@ pane without touching the client's streaming message state.
 ```ts
 "document-changed": {
     chatId: string;
+    documentId?: string;
 };
 ```
 
@@ -220,6 +223,12 @@ pane without touching the client's streaming message state.
 
 ```ts
 chatId: string;
+```
+
+### ServerEvents "document-changed".documentId
+
+```ts
+documentId?: string;
 ```
 
 ### ServerEvents "compaction-changed"

@@ -272,6 +272,8 @@ export function Chat({
 	initiallyCompacting = false,
 	initialConfigured = false,
 	initialDocument = null,
+	initialDocuments = [],
+	initialReadingDocumentId = null,
 	kind = "teach",
 }: {
 	chatId: string;
@@ -286,6 +288,10 @@ export function Chat({
 	/** The read session's living document at page load (the record already
 	 *  carries it; the pane refetches on document-changed). */
 	initialDocument?: StudyDocument | null;
+	/** Deeper documents spawned from its chapters. */
+	initialDocuments?: StudyDocument[];
+	/** The document the learner was reading last (chat steering target). */
+	initialReadingDocumentId?: string | null;
 	initialPrompt?: string;
 	/** A teacher turn is running server-side but attached to no client
 	 * (navigated away mid-turn, returned while in flight). */
@@ -1801,6 +1807,8 @@ export function Chat({
 					<ReadPane
 						chatId={chatId}
 						initialDocument={initialDocument}
+						initialDocuments={initialDocuments}
+						initialReadingDocumentId={initialReadingDocumentId}
 						sessionTitle={titleText}
 						writing={writingDocument}
 						className="absolute inset-0 z-0"

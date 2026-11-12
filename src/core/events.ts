@@ -34,7 +34,7 @@ export interface ServerEvents {
 	 *  GET /api/chats/:id/document. Deliberately separate from
 	 *  record-changed — a mid-turn document write must update the reading
 	 *  pane without touching the client's streaming message state. */
-	"document-changed": { chatId: string };
+	"document-changed": { chatId: string; documentId?: string };
 	/** Context compaction started or finished for this chat. While running is
 	 * true, the server gates model interaction and the client disables related
 	 * composer/dock submission. This is live state, not a persisted marker. */

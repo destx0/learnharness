@@ -85,6 +85,7 @@ describe("session kind (practice sessions, 2026-10-04)", () => {
 	it("the living document rides the record but stays OUT of the list payload", () => {
 		const chat = chatStore.createChat("read with a guide", "read");
 		chatStore.saveDocument(chat.id, {
+			id: "root",
 			title: "A guide",
 			sections: [{ id: "overview", heading: "Overview", body: "Body." }],
 			revision: 1,
@@ -94,6 +95,8 @@ describe("session kind (practice sessions, 2026-10-04)", () => {
 		const listed = chatStore.listChats().find((c) => c.id === chat.id);
 		assert.ok(listed);
 		assert.equal("document" in listed!, false, "the sidebar list must not carry the whole guide");
+		assert.equal("documents" in listed!, false, "the sidebar list must not carry the deeper tree");
+		assert.equal("readingDocumentId" in listed!, false, "view state stays off the sidebar list");
 	});
 
 	it("the summary projection marks a practice session with a posed problem as pendingProblem", async () => {

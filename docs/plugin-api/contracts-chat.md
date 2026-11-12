@@ -17,7 +17,10 @@
 - [SideChatMessage](#sidechatmessage) — supporting declaration
 - [SideChatThread](#sidechatthread) — supporting declaration
 - [StudyDocument](#studydocument) — supporting declaration
+- [StudyDocumentStatus](#studydocumentstatus) — supporting declaration
+- [StudyRelatedLink](#studyrelatedlink) — supporting declaration
 - [StudySection](#studysection) — supporting declaration
+- [StudyTopicSuggestion](#studytopicsuggestion) — supporting declaration
 - [TurnUsage](#turnusage) — supporting declaration
 
 ## CallUsage
@@ -164,6 +167,8 @@ export interface ChatRecord {
     kind?: ChatKind;
     tree?: PlanTree;
     document?: StudyDocument;
+    documents?: StudyDocument[];
+    readingDocumentId?: string;
     turns?: TurnUsage[];
     extractions?: ExtractionRunUsage[];
     settings?: ChatSettings;
@@ -185,6 +190,8 @@ export interface ChatRecord {
 - [kind](#chatrecord-kind)
 - [tree](#chatrecord-tree)
 - [document](#chatrecord-document)
+- [documents](#chatrecord-documents)
+- [readingDocumentId](#chatrecord-readingdocumentid)
 - [turns](#chatrecord-turns)
 - [extractions](#chatrecord-extractions)
 - [settings](#chatrecord-settings)
@@ -253,6 +260,25 @@ practice records.
 
 ```ts
 document?: StudyDocument;
+```
+
+### ChatRecord documents
+
+Deeper documents spawned from chapters of the living document
+(read sessions). The tree is derived from each document's parent
+link; the root stays in `document` for pre-deeper compatibility.
+
+```ts
+documents?: StudyDocument[];
+```
+
+### ChatRecord readingDocumentId
+
+The document the learner is currently reading. The floating chat
+steers this document; absent reads as the root.
+
+```ts
+readingDocumentId?: string;
 ```
 
 ### ChatRecord turns
@@ -897,21 +923,45 @@ Supporting declaration used by a public type. This is not an additional runtime 
 
 ```ts
 export interface StudyDocument {
+    id: string;
     title: string;
     sections: StudySection[];
     revision: number;
     updatedAt: string;
+    parent?: {
+        documentId: string;
+        sectionId: string;
+        topicId: string;
+    };
+    related?: StudyRelatedLink[];
+    status?: StudyDocumentStatus;
 }
 ```
 
-**Related types:** [StudySection](contracts-chat.md#studysection).
+**Related types:** [StudyDocumentStatus](contracts-chat.md#studydocumentstatus), [StudyRelatedLink](contracts-chat.md#studyrelatedlink), [StudySection](contracts-chat.md#studysection).
 
 **Member index** (including nested object members; inherited members are defined in the linked base types):
 
+- [id](#studydocument-id)
 - [title](#studydocument-title)
 - [sections](#studydocument-sections)
 - [revision](#studydocument-revision)
 - [updatedAt](#studydocument-updatedat)
+- [parent](#studydocument-parent)
+- [parent.documentId](#studydocument-parentdocumentid)
+- [parent.sectionId](#studydocument-parentsectionid)
+- [parent.topicId](#studydocument-parenttopicid)
+- [related](#studydocument-related)
+- [status](#studydocument-status)
+
+### StudyDocument id
+
+`"root"` for the session's first document; server-minted `doc_…`
+ids for deeper documents.
+
+```ts
+id: string;
+```
 
 ### StudyDocument title
 
@@ -941,6 +991,103 @@ ISO timestamp of the latest edit.
 updatedAt: string;
 ```
 
+### StudyDocument parent
+
+Where this document was spawned from; absent on the root.
+
+```ts
+parent?: {
+    documentId: string;
+    sectionId: string;
+    topicId: string;
+};
+```
+
+### StudyDocument parent.documentId
+
+```ts
+documentId: string;
+```
+
+### StudyDocument parent.sectionId
+
+```ts
+sectionId: string;
+```
+
+### StudyDocument parent.topicId
+
+```ts
+topicId: string;
+```
+
+### StudyDocument related
+
+Cross-links to related documents/chapters.
+
+```ts
+related?: StudyRelatedLink[];
+```
+
+### StudyDocument status
+
+Generation state; absent reads as ready.
+
+```ts
+status?: StudyDocumentStatus;
+```
+
+## StudyDocumentStatus
+
+Supporting declaration used by a public type. This is not an additional runtime API or SDK helper.
+
+A child document's generation state. Absent reads as ready (root and
+pre-deeper records never carried a status).
+
+```ts
+export type StudyDocumentStatus = "writing" | "ready" | "failed";
+```
+
+## StudyRelatedLink
+
+Supporting declaration used by a public type. This is not an additional runtime API or SDK helper.
+
+A cross-link from a document to a related document/chapter. Agent-
+authored when it writes a child; drawn dashed in the graph and listed
+in the reading footer.
+
+```ts
+export interface StudyRelatedLink {
+    documentId: string;
+    sectionId?: string;
+    reason: string;
+}
+```
+
+**Member index** (including nested object members; inherited members are defined in the linked base types):
+
+- [documentId](#studyrelatedlink-documentid)
+- [sectionId](#studyrelatedlink-sectionid)
+- [reason](#studyrelatedlink-reason)
+
+### StudyRelatedLink documentId
+
+```ts
+documentId: string;
+```
+
+### StudyRelatedLink sectionId
+
+```ts
+sectionId?: string;
+```
+
+### StudyRelatedLink reason
+
+```ts
+reason: string;
+```
+
 ## StudySection
 
 Supporting declaration used by a public type. This is not an additional runtime API or SDK helper.
@@ -953,14 +1100,18 @@ export interface StudySection {
     id: string;
     heading: string;
     body: string;
+    suggestions?: StudyTopicSuggestion[];
 }
 ```
+
+**Related types:** [StudyTopicSuggestion](contracts-chat.md#studytopicsuggestion).
 
 **Member index** (including nested object members; inherited members are defined in the linked base types):
 
 - [id](#studysection-id)
 - [heading](#studysection-heading)
 - [body](#studysection-body)
+- [suggestions](#studysection-suggestions)
 
 ### StudySection id
 
@@ -980,6 +1131,79 @@ heading: string;
 
 ```ts
 body: string;
+```
+
+### StudySection suggestions
+
+Deeper directions for this chapter, generated on demand.
+
+```ts
+suggestions?: StudyTopicSuggestion[];
+```
+
+## StudyTopicSuggestion
+
+Supporting declaration used by a public type. This is not an additional runtime API or SDK helper.
+
+One deeper-topic direction the read agent suggests for a chapter. The
+learner chooses one; the app then either opens an existing document
+(`documentId`) or writes a new child document for it.
+
+```ts
+export interface StudyTopicSuggestion {
+    id: string;
+    heading: string;
+    blurb: string;
+    documentId?: string;
+    sectionId?: string;
+}
+```
+
+**Member index** (including nested object members; inherited members are defined in the linked base types):
+
+- [id](#studytopicsuggestion-id)
+- [heading](#studytopicsuggestion-heading)
+- [blurb](#studytopicsuggestion-blurb)
+- [documentId](#studytopicsuggestion-documentid)
+- [sectionId](#studytopicsuggestion-sectionid)
+
+### StudyTopicSuggestion id
+
+Stable lowercase slug, unique within the section — chosen once.
+
+```ts
+id: string;
+```
+
+### StudyTopicSuggestion heading
+
+```ts
+heading: string;
+```
+
+### StudyTopicSuggestion blurb
+
+One line: what going deeper would cover.
+
+```ts
+blurb: string;
+```
+
+### StudyTopicSuggestion documentId
+
+An already-written document this direction points to. Absent means
+choosing the suggestion generates a new child document.
+
+```ts
+documentId?: string;
+```
+
+### StudyTopicSuggestion sectionId
+
+A chapter within `documentId` (defaults to that document's top).
+
+```ts
+sectionId?: string;
 ```
 
 ## TurnUsage

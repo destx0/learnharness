@@ -420,7 +420,7 @@ Write the summary with EXACTLY these sections, in this order:
 What the learner asked for — expansions, rewrites, simplifications, questions, corrections, preferences — what was delivered, and what remains open. This section carries the most weight: the next turn must honor the open requests and not repeat work already done.
 
 ## The document's current state
-The document is stored by the app; call read_document when you need its full text. Reproduce the title and section list verbatim from below — do not drop sections or ids.
+The documents are stored by the app; call read_document when you need their full text, and list_documents for the tree. Reproduce the tree below verbatim — do not drop documents, sections, suggestion ids, or document ids.
 
 ${outline}
 

@@ -29,6 +29,35 @@ export type ChatKind = "teach" | "practice" | "read";
 // agent can revise one part without rewriting the whole guide; `revision`
 // bumps on every edit so the pane can tell a newer server copy from its own.
 
+/** One deeper-topic direction the read agent suggests for a chapter. The
+ *  learner chooses one; the app then either opens an existing document
+ *  (`documentId`) or writes a new child document for it. */
+export interface StudyTopicSuggestion {
+	/** Stable lowercase slug, unique within the section — chosen once. */
+	id: string;
+	heading: string;
+	/** One line: what going deeper would cover. */
+	blurb: string;
+	/** An already-written document this direction points to. Absent means
+	 *  choosing the suggestion generates a new child document. */
+	documentId?: string;
+	/** A chapter within `documentId` (defaults to that document's top). */
+	sectionId?: string;
+}
+
+/** A cross-link from a document to a related document/chapter. Agent-
+ *  authored when it writes a child; drawn dashed in the graph and listed
+ *  in the reading footer. */
+export interface StudyRelatedLink {
+	documentId: string;
+	sectionId?: string;
+	reason: string;
+}
+
+/** A child document's generation state. Absent reads as ready (root and
+ *  pre-deeper records never carried a status). */
+export type StudyDocumentStatus = "writing" | "ready" | "failed";
+
 /** One navigable section of a study document. `body` is markdown (LaTeX and
  *  mermaid render in the pane); `heading` is the TOC label. */
 export interface StudySection {
@@ -36,15 +65,26 @@ export interface StudySection {
 	id: string;
 	heading: string;
 	body: string;
+	/** Deeper directions for this chapter, generated on demand. */
+	suggestions?: StudyTopicSuggestion[];
 }
 
 export interface StudyDocument {
+	/** `"root"` for the session's first document; server-minted `doc_…`
+	 *  ids for deeper documents. */
+	id: string;
 	title: string;
 	sections: StudySection[];
 	/** Monotonic edit counter (1 on the first write). */
 	revision: number;
 	/** ISO timestamp of the latest edit. */
 	updatedAt: string;
+	/** Where this document was spawned from; absent on the root. */
+	parent?: { documentId: string; sectionId: string; topicId: string };
+	/** Cross-links to related documents/chapters. */
+	related?: StudyRelatedLink[];
+	/** Generation state; absent reads as ready. */
+	status?: StudyDocumentStatus;
 }
 
 /** The read agent's document tool names (single-sourced for the tool
@@ -71,6 +111,13 @@ export interface ChatRecord {
 	 *  agent's edit_document tool via saveDocument. Absent on teach and
 	 *  practice records. */
 	document?: StudyDocument;
+	/** Deeper documents spawned from chapters of the living document
+	 *  (read sessions). The tree is derived from each document's parent
+	 *  link; the root stays in `document` for pre-deeper compatibility. */
+	documents?: StudyDocument[];
+	/** The document the learner is currently reading. The floating chat
+	 *  steers this document; absent reads as the root. */
+	readingDocumentId?: string;
 	/** Append-only usage log, separate from message history: one entry per billed
 	 * turn, deduplicated by request identity. messageId associates usage with the
 	 * transcript; token/cost aggregates are computed from the log at read time. */
@@ -91,8 +138,10 @@ export interface ChatRecord {
 	version?: number;
 }
 
-/** The chat record format this build writes and understands. */
-export const CURRENT_CHAT_VERSION = 2;
+/** The chat record format this build writes and understands. Version 3
+ *  adds the deeper-document tree (`documents` / `readingDocumentId`) and
+ *  document suggestion/related state. */
+export const CURRENT_CHAT_VERSION = 3;
 
 /** Per-session model and thinking choices for native conversation agents.
  * Each absent field falls back independently to the strong model slot; no

@@ -70,8 +70,12 @@ export interface ChatStore {
 	/** Persist the session plan tree (plan tools call this in execute). */
 	saveTree(id: string, tree: PlanTree): void;
 	/** Persist the living study document (the read agent's edit_document
-	 *  tool calls this in execute; teach/practice sessions never do). */
+	 *  tool calls this in execute; teach/practice sessions never do). A
+	 *  child document upserts into the session's deeper-document list. */
 	saveDocument(id: string, document: StudyDocument): void;
+	/** Remember which document the learner is reading; the floating chat
+	 *  steers that document. View state: does not bump updatedAt. */
+	saveReadingDocumentId(id: string, documentId: string): void;
 	/** Append one usage entry to the record's turn log (the money channel,
 	 * 2026-09): idempotent per turn id — each request carries its own, so
 	 * a turn persisted twice appends once while continuation turns (which

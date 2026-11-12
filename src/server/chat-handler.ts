@@ -56,6 +56,7 @@ import { sideChats, type SideChatService } from "./side-chat.ts";
 import { SIDE_CONTEXT_BUDGET_ERROR, sideBudgetRetryDrops, sideContextWindow } from "./side-context-budget.ts";
 import { registerTurn, rememberTurnFailure, unregisterTurn } from "./turn-runs.ts";
 import { persistTurn, triggerExtraction, TurnPersistenceError } from "./turn-service.ts";
+import { finalizeReadDocuments } from "./read-documents.ts";
 import { hasProbeDone, hasUnresolvedQuestion, pendingPluginQuestionOf, pluginQuestionCallsOf, questionCallsOf } from "../core/native-messages.ts";
 import { samePluginQuestionOccurrence } from "../core/plugin-questions.ts";
 import { composeInstructions } from "../agent/teacher-agent.ts";
@@ -924,6 +925,10 @@ export async function handleChatInput(
 				// subsequent fetch reads the dismissal already in the record
 				// (the same ordering law as persistTurn itself).
 				applyParkedDismissal(stores.chatStore, chatId);
+				// Deep-document settlement: a child created "writing" becomes
+				// ready (content landed) or failed (the writer stopped empty)
+				// BEFORE endTurn emits turn-settled.
+				finalizeReadDocuments(stores.chatStore, chatId);
 				// Any helper activity after the last model call stays pending;
 				// settlement never injects it behind the agent's context.
 				// LAST: a poller that sees not-in-flight must read an already-persisted
@@ -1035,6 +1040,7 @@ export async function handleChatInput(
 		if (turnClaimed && !handedOff) {
 			try {
 				if (!preparation || preparation.isCurrent()) applyParkedDismissal(stores.chatStore, chatId);
+				finalizeReadDocuments(stores.chatStore, chatId);
 			} catch (err) { console.error(`[chat ${chatId}] parked dismissal failed:`, err); }
 			finally {
 				if (!preparation || preparation.isCurrent()) unregisterLiveAgent(chatId);

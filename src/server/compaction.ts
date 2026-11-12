@@ -39,7 +39,7 @@ import {
 	newCompactionMarker,
 	planTreeToText,
 	serializeForSummary,
-	studyDocumentOutline,
+	studyDocumentTreeText,
 	toLlmMessages,
 	type CompactionDetails,
 	type ChatRecord,
@@ -239,10 +239,11 @@ async function compact(deps: CompactionDeps, chatId: string): Promise<void> {
 		spanText: fullSpan,
 		planTreeText: planTreeToText(record.tree, messages),
 		kind: deps.kind,
-		// READ sessions (2026-11-04): the guide itself is in the record, so
-		// the summary carries only its title + section list, and the future
-		// agent calls read_document for the full text.
-		documentText: deps.kind === "read" && record.document ? studyDocumentOutline(record.document) : null,
+		// READ sessions (2026-11-04; deeper tree 2026-11-12): the guides
+		// themselves are in the record, so the summary carries the document
+		// tree (titles, section ids, suggestions, related links), and the
+		// future agent calls read_document for the full text.
+		documentText: deps.kind === "read" && record.document ? studyDocumentTreeText(record) : null,
 	});
 
 	emit("compaction-changed", { chatId, running: true });

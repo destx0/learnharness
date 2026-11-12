@@ -11,10 +11,20 @@ import { describe, it } from "node:test";
 
 import {
 	applyStudyDocumentEdit,
+	applyStudySuggestions,
+	createChildStudyDocument,
+	removeStudyRelatedLink,
 	StudyDocumentError,
+	studyDocumentBreadcrumb,
+	studyDocumentById,
+	studyDocumentCanGoDeeper,
+	studyDocumentChildForTopic,
+	studyDocumentDepth,
+	studyDocumentList,
 	studyDocumentOutline,
 	studyDocumentToc,
 	studyDocumentToMarkdown,
+	studyDocumentTreeText,
 	studyDocumentWordCount,
 } from "../src/core/study-document.ts";
 import type { StudyDocument } from "../src/core/contracts/chat.ts";
@@ -167,5 +177,116 @@ describe("study document projections", () => {
 		assert.match(studyDocumentOutline(doc), /Title: Linear algebra/);
 		assert.match(studyDocumentOutline(doc), /- Linear maps \(maps\)/);
 		assert.equal(studyDocumentWordCount(doc), 14);
+	});
+});
+
+
+describe("deeper-document tree", () => {
+	function withDirections(): StudyDocument {
+		const doc = applyStudySuggestions(firstDoc(), "maps", [
+			{ id: "eigen", heading: "Eigenvectors", blurb: "The directions a map leaves fixed." },
+			{ id: "rank", heading: "Rank and nullity", blurb: "What a map destroys and keeps." },
+		], NOW);
+		return doc;
+	}
+
+	it("stores directions on a chapter and replaces them on refresh", () => {
+		const doc = withDirections();
+		assert.deepEqual(doc.sections.find((s) => s.id === "maps")?.suggestions?.map((t) => t.id), ["eigen", "rank"]);
+		const again = applyStudySuggestions(doc, "maps", [
+			{ id: "dual", heading: "Dual spaces", blurb: "Maps seen from the other side." },
+		], NOW);
+		assert.deepEqual(again.sections.find((s) => s.id === "maps")?.suggestions?.map((t) => t.id), ["dual"]);
+		assert.throws(
+			() => applyStudySuggestions(doc, "missing", [{ id: "x", heading: "X", blurb: "Y" }]),
+			(err) => err instanceof StudyDocumentError && /no section with id "missing"/.test(err.message),
+		);
+		assert.throws(
+			() => applyStudySuggestions(doc, "maps", [{ id: "x", heading: "X", blurb: "" }]),
+			(err) => err instanceof StudyDocumentError && /blurb must not be empty/.test(err.message),
+		);
+	});
+
+	it("creates a pending child with a parent link and finds it by topic", () => {
+		const root = withDirections();
+		const child = createChildStudyDocument(
+			{ document: root, documents: [] },
+			"root",
+			"maps",
+			"eigen",
+			"doc_eigen",
+			NOW,
+		);
+		assert.equal(child.id, "doc_eigen");
+		assert.equal(child.title, "Eigenvectors");
+		assert.equal(child.status, "writing");
+		assert.deepEqual(child.parent, { documentId: "root", sectionId: "maps", topicId: "eigen" });
+		const record = { document: root, documents: [child] };
+		assert.equal(studyDocumentList(record).length, 2);
+		assert.equal(studyDocumentById(record, "doc_eigen")?.title, "Eigenvectors");
+		assert.equal(studyDocumentChildForTopic(record, "root", "maps", "eigen")?.id, "doc_eigen");
+		assert.equal(studyDocumentDepth(record, "doc_eigen"), 1);
+		assert.deepEqual(studyDocumentBreadcrumb(record, "doc_eigen").map((d) => d.id), ["root", "doc_eigen"]);
+		assert.equal(studyDocumentCanGoDeeper(record, "doc_eigen"), true);
+		assert.match(studyDocumentTreeText(record), /\[doc_eigen\] Eigenvectors \(writing\)/);
+		assert.match(studyDocumentTreeText(record), /eigen \(Eigenvectors\)/);
+	});
+
+	it("refuses a child for an unknown topic or an exhausted depth", () => {
+		const root = withDirections();
+		assert.throws(
+			() => createChildStudyDocument({ document: root, documents: [] }, "root", "maps", "nope", "doc_x", NOW),
+			(err) => err instanceof StudyDocumentError && /no suggestion "nope"/.test(err.message),
+		);
+		// Build the maximum chain: each child gets a chapter, a direction,
+		// then one child.
+		let current: StudyDocument = root;
+		let rootDoc: StudyDocument = root;
+		const documents: StudyDocument[] = [];
+		for (let depth = 0; depth < 6; depth++) {
+			current = applyStudySuggestions(current, "overview", [
+				{ id: `next-${depth}`, heading: `Deeper ${depth}`, blurb: "Next." },
+			], NOW);
+			if (current.id === "root") rootDoc = current;
+			else {
+				const at = documents.findIndex((doc) => doc.id === current.id);
+				if (at >= 0) documents[at] = current;
+			}
+			const child = createChildStudyDocument(
+				{ document: rootDoc, documents },
+				current.id,
+				"overview",
+				`next-${depth}`,
+				`doc_d${depth}`,
+				NOW,
+			);
+			documents.push(child);
+			current = applyStudyDocumentEdit(child, {
+				sections: [{ id: "overview", heading: "Overview", body: "A chapter." }],
+			}, NOW);
+			const childAt = documents.findIndex((doc) => doc.id === current.id);
+			if (childAt >= 0) documents[childAt] = current;
+		}
+		assert.equal(studyDocumentDepth({ document: rootDoc, documents }, "doc_d5"), 6);
+		assert.equal(studyDocumentCanGoDeeper({ document: rootDoc, documents }, "doc_d5"), false);
+		assert.throws(
+			() => createChildStudyDocument({ document: rootDoc, documents }, "doc_d5", "overview", "next", "doc_more", NOW),
+			(err) => err instanceof StudyDocumentError && /limit/.test(err.message),
+		);
+	});
+
+	it("stores and removes related links", () => {
+		const root = withDirections();
+		const edited = applyStudyDocumentEdit(root, {
+			related: [{ documentId: "doc_eigen", sectionId: "idea", reason: "Same geometry, other direction." }],
+		}, NOW);
+		assert.equal(edited.related?.length, 1);
+		assert.throws(
+			() => applyStudyDocumentEdit(root, { related: [{ documentId: "root", reason: "Self." }] }, NOW),
+			(err) => err instanceof StudyDocumentError && /cannot relate to itself/.test(err.message),
+		);
+		const removed = removeStudyRelatedLink(edited, "doc_eigen", "idea", NOW);
+		assert.equal(removed.related, undefined);
+		assert.equal(removeStudyRelatedLink(removed, "doc_eigen", "idea"), removed);
 	});
 });

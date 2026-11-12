@@ -82,6 +82,9 @@ for (const extra of ["dist", path.join("node_modules", "electron")]) {
 for (const asset of [
 	path.join("src", "agent", "system-prompt.md"),
 	path.join("src", "agent", "prompts", "teacher", "20-teaching.md"),
+	// Read sessions (2026-11-04): the read agent's own base + doctrine must
+	// ship too — the prompt loader reads the directory at runtime.
+	path.join("src", "agent", "prompts", "read", "00-base.md"),
 ]) {
 	if (!exists(path.join(STANDALONE, asset))) {
 		console.error(`[build-server] prompt asset missing from the trace: ${asset}`);

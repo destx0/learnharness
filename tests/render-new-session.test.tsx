@@ -47,6 +47,12 @@ describe("startDraftSession — the create-on-send contract", () => {
 		assert.equal(await startDraftSession("   ", f), null);
 		assert.equal(calls.length, 0);
 	});
+
+	it("read drafts create a kind:'read' session with no graph context", async () => {
+		const { f, calls } = fakeFetch("c_read");
+		await startDraftSession("linear algebra", f, "read", [{ id: "n1", name: "N", statement: "S" }]);
+		assert.deepEqual(calls[0]!.body, { title: "linear algebra", kind: "read" });
+	});
 });
 
 describe("DraftShell — the sessionless surface", () => {
@@ -72,6 +78,16 @@ describe("DraftShell — the sessionless surface", () => {
 		assert.ok(html.includes("pointer-events-none"));
 		// …and the blob re-enables it.
 		assert.ok(/rounded-2xl[^>]*pointer-events-auto|pointer-events-auto[^>]*rounded-2xl/.test(html));
+	});
+
+	it("read drafts carry the reading copy and hide the graph picker", () => {
+		const html = renderToStaticMarkup(
+			<DraftShell busy={false} text="" onChange={() => {}} onSend={() => {}} mode="read" />,
+		);
+		assert.ok(html.includes("New reading session"));
+		assert.ok(html.includes("living study document"));
+		assert.ok(html.includes("What do you want to read about?"));
+		assert.ok(!html.includes("Pick nodes"));
 	});
 
 	it("renders the setup CTA above the composer blob when passed (fix wave chunk B: /chat/new mirrors home)", () => {

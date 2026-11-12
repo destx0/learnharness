@@ -375,9 +375,41 @@ export function buildCompactionPrompt(input: {
 	spanText: string;
 	/** The plan tree rendered (planTreeToText) or null. */
 	planTreeText: string | null;
-	/** The session kind (wording: tutor vs practice agent). */
-	kind: "teach" | "practice" | "probe";
+	/** The session kind (wording: tutor vs practice vs reading agent). */
+	kind: "teach" | "practice" | "probe" | "read";
+	/** READ sessions only: the document title + section list (the full text
+	 *  lives in the record; the future agent reads it with read_document). */
+	documentText?: string | null;
 }): string {
+	// READ sessions (owner 2026-11-04): the living study document is stored
+	// on the record, not in the transcript, so the summary must NOT reproduce
+	// it — it carries the learner's steering and the current title/TOC, and
+	// the future agent calls read_document for the body. The teaching-shaped
+	// sections (understanding, teaching arc, plan tree) do not apply.
+	if (input.kind === "read") {
+		const outline =
+			input.documentText ?? "No study document has been written yet.";
+		return `You are compacting the earlier part of a reading session — writing the summary your future self will read INSTEAD of that transcript. The learner is reading and steering a living study document; the document itself is stored in the app, NOT in this transcript. Do not reproduce its body here. Everything before the cut is replaced by what you write; everything after stays verbatim. The transcript below labels the learner as [LEARNER], the writing agent as [AGENT], tool traffic as [RESULT …]/[SYSTEM NOTE].
+
+Write the summary with EXACTLY these sections, in this order:
+
+## The learner's steering
+What the learner asked for — expansions, rewrites, simplifications, questions, corrections, preferences — what was delivered, and what remains open. This section carries the most weight: the next turn must honor the open requests and not repeat work already done.
+
+## The document's current state
+The document is stored by the app; call read_document when you need its full text. Reproduce the title and section list verbatim from below — do not drop sections or ids.
+
+${outline}
+
+## The current moment
+What is happening RIGHT NOW at the cut: any open request, any research/PDF job still pending, any commitment the agent made that a later turn must honor, and the immediate next step.
+
+Rules: no praise, no filler, no speculation beyond the transcript. Every claim about the learner must be traceable to what they actually wrote. Keep every identifier (section ids, file paths) exact.
+
+TRANSCRIPT TO SUMMARIZE:
+
+${input.spanText}`;
+	}
 	const planSection =
 		input.planTreeText ?? "No plan tree exists in this session (nothing was persisted).";
 	return `You are compacting the earlier part of a tutoring session — writing the summary your future self will read INSTEAD of that transcript. Everything before the cut is replaced by what you write; everything after stays verbatim. The learner's transcript below labels the learner as [LEARNER], the tutoring agent as [TUTOR], tool traffic as [RESULT …]/[SYSTEM NOTE].

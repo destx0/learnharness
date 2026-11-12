@@ -43,7 +43,7 @@ const DOCK = "mx-auto w-full max-w-[46rem] px-4";
 export async function startDraftSession(
 	text: string,
 	fetchLike: typeof fetch,
-	mode?: "practice",
+	mode?: "practice" | "read",
 	picks?: readonly DraftPick[],
 ): Promise<string | null> {
 	const t = text.trim();
@@ -51,14 +51,18 @@ export async function startDraftSession(
 	// THE PICKS RIDE THE CREATE (owner round 10): a practice draft seeded
 	// from the pick bar creates its session WITH the graph context — the
 	// same contract as the home screen's practice send (the marker with
-	// [id] name: statement lines, target validation's truth set).
+	// [id] name: statement lines, target validation's truth set). Read
+	// drafts carry no graph context — the study guide is written from the
+	// topic, not from picked propositions.
 	const res = await fetchLike("/api/chats", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(
 			mode === "practice"
 				? { title: t, kind: "practice", ...(picks && picks.length > 0 ? { graphContext: { propositions: picks } } : {}) }
-				: { title: t },
+				: mode === "read"
+					? { title: t, kind: "read" }
+					: { title: t },
 		),
 	});
 	const { id } = (await res.json()) as { id: string };
@@ -88,10 +92,10 @@ export function DraftShell({
 	text: string;
 	onChange: (v: string) => void;
 	onSend: () => void;
-	/** The practice draft (owner, 2026-10-04): ?mode=practice — the
-	 *  created session carries kind:"practice" and the copy changes
-	 *  (the practice agent opens; no probing). */
-	mode?: "teach" | "practice";
+	/** The practice/read drafts (owner, 2026-10-04; read 2026-11-04):
+	 *  ?mode=practice|read — the created session carries the kind and the
+	 *  copy changes (the practice or read agent opens; no probing). */
+	mode?: "teach" | "practice" | "read";
 	/** The first-run CTA (fix wave chunk B): the same "Set up your models"
 	 *  affordance home carries, rendered above the draft shell — passed by
 	 *  NewSession, which owns the configured state and the SetupDialog. */
@@ -172,11 +176,19 @@ export function DraftShell({
 						<Conversation className="h-full min-w-0 flex-1" initial="instant">
 							<ConversationContent className="min-h-full gap-0 p-0">
 								<ConversationEmptyState
-									title={mode === "practice" ? "New practice session" : "New session"}
+									title={
+										mode === "practice"
+											? "New practice session"
+											: mode === "read"
+												? "New reading session"
+												: "New session"
+									}
 									description={
 										mode === "practice"
 											? "Pick nodes from your knowledge graph, describe what you want to practice, or bring your own problem."
-											: "The teacher will open by probing what you already know."
+											: mode === "read"
+												? "The agent will write a living study document you can read and steer."
+												: "The teacher will open by probing what you already know."
 									}
 								/>
 							</ConversationContent>
@@ -185,7 +197,10 @@ export function DraftShell({
 						<div className="bg-background pb-4">
 							<div className={DOCK}>
 								<ComposerActions
-									picker={(picks.length > 0 || mode === "practice") && (
+									// Read sessions do not use graph propositions — the
+									// guide is written from the topic, so the pick flow
+									// stays out of the read draft entirely.
+									picker={mode !== "read" && (picks.length > 0 || mode === "practice") && (
 										<NodePickerControl count={picks.length} onOpen={onOpenPicker} onClear={onClearPicks} />
 									)}
 									setup={setupCta}
@@ -205,7 +220,13 @@ export function DraftShell({
 										// input (owner refinement round, 2026-09-24) — no lesson has
 										// started yet, so the composer must not read like one is in
 										// flight.
-										placeholder={mode === "practice" ? "What do you want to practice?" : "What do you want to learn?"}
+										placeholder={
+											mode === "practice"
+												? "What do you want to practice?"
+												: mode === "read"
+													? "What do you want to read about?"
+													: "What do you want to learn?"
+										}
 									/>
 								</div>
 								<StatsBar
@@ -230,7 +251,7 @@ export function DraftShell({
 	);
 }
 
-export function NewSession({ initialConfigured, mode = "teach" }: { initialConfigured: boolean; mode?: "teach" | "practice" }) {
+export function NewSession({ initialConfigured, mode = "teach" }: { initialConfigured: boolean; mode?: "teach" | "practice" | "read" }) {
 	const router = useRouter();
 	const [text, setText] = useState("");
 	/* The draft MIRROR ("nothing gets lost" round, 2026-10-01): the shell's
@@ -302,13 +323,18 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 			return;
 		}
 		setBusy(true);
-		void startDraftSession(draft, fetch, mode === "practice" ? "practice" : undefined, mode === "practice" ? picksRef.current : undefined)
+		void startDraftSession(
+			draft,
+			fetch,
+			mode === "practice" || mode === "read" ? mode : undefined,
+			mode === "practice" ? picksRef.current : undefined,
+		)
 			.then((target) => {
 				if (target) router.push(target);
 				else setBusy(false);
 			})
 			.catch(() => setBusy(false));
-	}, [busy, router, configured, zeroKeys, strongKeyless]);
+	}, [busy, router, configured, zeroKeys, strongKeyless, mode]);
 
 	return (
 		<>

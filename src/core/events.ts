@@ -44,6 +44,12 @@ export interface ServerEvents {
 	 *  Same notify-then-fetch contract as the turn events: open views of
 	 *  the chat refetch and adopt the durable record. */
 	"record-changed": { chatId: string };
+	/** The read session's living document changed (the read agent's
+	 *  document tool wrote it). Notify-then-fetch: the open pane refetches
+	 *  GET /api/chats/:id/document. Deliberately separate from
+	 *  record-changed — a mid-turn document write must update the reading
+	 *  pane without touching the client's streaming message state. */
+	"document-changed": { chatId: string };
 	/** A compaction started/finished for the chat (owner round 14,
 	 *  2026-10-05). running=true is the SEND GATE: while a compaction is
 	 *  in flight the server structurally refuses model interaction for
@@ -65,6 +71,7 @@ export const SERVER_EVENT_TYPES = [
 	"chats-changed",
 	"subscriptions-changed",
 	"record-changed",
+	"document-changed",
 	"compaction-changed",
 ] as const satisfies readonly ServerEventType[];
 

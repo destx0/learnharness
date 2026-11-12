@@ -9,9 +9,11 @@ import { effectivePromptSegments } from "./prompt-segments.ts";
 import {
 	askUserQuestionTool,
 	createProberTools,
+	createReadTools,
 	createTeacherTools,
 	type ProbeDoneContext,
 	type ProberToolContext,
+	type ReadToolContext,
 	type TeacherToolContext,
 } from "./tools.ts";
 import { practiceTools, type PracticeToolContext } from "./tools/practice.ts";
@@ -47,9 +49,10 @@ import { usageWasAdmitted } from "./subscription-request-cycle.ts";
  * without ever leaking into the model's prompt.
  */
 
-/** Which agent's prompt directory to compose. Practice (2026-10-04)
- *  composes ONLY its own directory — see prompt-segments.ts. */
-export type AgentKind = "prober" | "teacher" | "practice";
+/** Which agent's prompt directory to compose. Practice (2026-10-04) and
+ *  read (2026-11-04) compose ONLY their own directory + a curated shared
+ *  appendix — see prompt-segments.ts. */
+export type AgentKind = "prober" | "teacher" | "practice" | "read";
 
 // P2 (2026-09-19): segment discovery + override resolution live in ONE
 // canonical place now — src/store/prompt-overrides.ts (listSourceSegments
@@ -89,6 +92,7 @@ const composedInstructions: Record<AgentKind, string> = {
 	prober: composeInstructions("prober"),
 	teacher: composeInstructions("teacher"),
 	practice: composeInstructions("practice"),
+	read: composeInstructions("read"),
 };
 
 // Money channel (wave 4): the chat-handler passes a per-turn collector;
@@ -336,8 +340,22 @@ export function createPracticeAgent(ctx: PracticeToolContext, opts: AgentBuildOp
 	return baseAgentOptions("practice", opts, Object.values(tools));
 }
 
+/**
+ * The READER (read sessions, owner 2026-11-04): built from turn 1 of a
+ * kind:"read" session. Its entire registry is the living-document pair
+ * (edit_document / read_document), the learner-filesystem set, and
+ * research/PDF dispatch. No probing, no plan, no questions, no problems.
+ * The doctrine prompt (prompts/read/) carries the writing method; the base
+ * carries the opening law and the tool mechanics.
+ */
+export function createReadAgent(ctx: ReadToolContext, opts: AgentBuildOptions = {}) {
+	const tools = opts.tools ?? createReadTools(ctx, opts.toolToggles);
+	return baseAgentOptions("read", opts, Object.values(tools));
+}
+
 export type ProberAgent = ReturnType<typeof createProberAgent>;
 export type TeacherAgent = ReturnType<typeof createTeacherAgent>;
 export type PracticeAgent = ReturnType<typeof createPracticeAgent>;
-export type TeachingAgent = ProberAgent | TeacherAgent | PracticeAgent;
+export type ReadAgent = ReturnType<typeof createReadAgent>;
+export type TeachingAgent = ProberAgent | TeacherAgent | PracticeAgent | ReadAgent;
 

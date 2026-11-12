@@ -21,11 +21,44 @@ import type { EmissionStats } from "./graph.ts";
  * is the client's own grouping fold (core/view.ts, Wave D) — a pending quiz
  * is an unanswered question tool call, which is exactly what makes
  * resume-mid-question free. */
-/** The session's kind (practice sessions, owner 2026-10-04): "teach" is
- *  the default and ABSENT on pre-practice records (no migration — absence
- *  reads as teach); "practice" marks an adaptive-practice session — the
- *  practice agent, its two tools, no extraction, no graph writes. */
-export type ChatKind = "teach" | "practice";
+/** The session's kind (practice sessions, owner 2026-10-04; read sessions,
+ *  2026-11-04): "teach" is the default and ABSENT on pre-practice records
+ *  (no migration — absence reads as teach); "practice" marks an
+ *  adaptive-practice session; "read" marks a reading session — the read
+ *  agent, the living study document, no quiz/probing/plan, no extraction. */
+export type ChatKind = "teach" | "practice" | "read";
+
+// ─── The living study document (read sessions, 2026-11-04) ─────────────────
+//
+// The document is the read session's artifact: a structured, agent-authored
+// study guide that the learner reads and steers through chat. It lives on the
+// ChatRecord (the canonical state survives reloads and compaction) and is
+// written only by the edit_document tool. Sections carry stable ids so the
+// agent can revise one part without rewriting the whole guide; `revision`
+// bumps on every edit so the pane can tell a newer server copy from its own.
+
+/** One navigable section of a study document. `body` is markdown (LaTeX and
+ *  mermaid render in the pane); `heading` is the TOC label. */
+export interface StudySection {
+	/** Stable lowercase slug (a-z, 0-9, hyphens/underscores) — chosen once. */
+	id: string;
+	heading: string;
+	body: string;
+}
+
+export interface StudyDocument {
+	title: string;
+	sections: StudySection[];
+	/** Monotonic edit counter (1 on the first write). */
+	revision: number;
+	/** ISO timestamp of the latest edit. */
+	updatedAt: string;
+}
+
+/** The read agent's document tool names (single-sourced for the tool
+ *  registry, the continuation fold, and the UI's artifact renderer). */
+export const EDIT_DOCUMENT_TOOL = "edit_document";
+export const READ_DOCUMENT_TOOL = "read_document";
 
 export interface ChatRecord {
 	id: string;
@@ -37,6 +70,10 @@ export interface ChatRecord {
 	kind?: ChatKind;
 	/** The session's plan tree (vision §2) — written by plan tools via saveTree. */
 	tree?: PlanTree;
+	/** The living study document (read sessions, 2026-11-04) — written by
+	 *  the read agent's edit_document tool via saveDocument. Absent on
+	 *  teach/practice records. */
+	document?: StudyDocument;
 	/** Append-only usage log (observability, 2026-09): one entry per model
 	 * turn. DELIBERATELY a parallel log, not per-message metadata — the client
 	 * re-POSTs its message list every turn and its copies never carry

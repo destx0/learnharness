@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { MenuShell } from "@/components/menu-shell";
 import { DeleteSessionDialog } from "@/components/delete-session-dialog";
 import type { ChatDeleteMode } from "@/src/core";
-import { DumbbellIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
+import { BookOpenIcon, DumbbellIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { CoverageMenuBlock } from "@/components/extraction-coverage";
 import { LhMark } from "@/components/lh-mark";
@@ -326,6 +326,9 @@ export function SessionRow({
 			{(chat.kind ?? "teach") === "practice" && (
 				<DumbbellIcon className="size-3.5 shrink-0 text-muted-foreground/70" aria-label="Practice session" />
 			)}
+			{(chat.kind ?? "teach") === "read" && (
+				<BookOpenIcon className="size-3.5 shrink-0 text-muted-foreground/70" aria-label="Reading session" />
+			)}
 		</button>
 	);
 }
@@ -380,10 +383,10 @@ export function RenameRow({ chat, onCommit, onCancel }: { chat: ChatListItem; on
 	);
 }
 
-/** The three-way kind filter (practice sessions, owner 2026-10-04):
- *  Teaching / All / Practice — a client-side filter over the same
+/** The kind filter (practice sessions, owner 2026-10-04; read 2026-11-04):
+ *  Teaching / Practice / Read / All — a client-side filter over the same
  *  snapshot, persisted in localStorage, defaulting to All. */
-export type SessionKindFilter = "teach" | "all" | "practice";
+export type SessionKindFilter = "teach" | "practice" | "read" | "all";
 const KIND_FILTER_KEY = "lh:session-kind-filter";
 
 function SessionsSidebar() {
@@ -393,7 +396,7 @@ function SessionsSidebar() {
 	const [kindFilter, setKindFilter] = useState<SessionKindFilter>("all");
 	useEffect(() => {
 		const stored = window.localStorage.getItem(KIND_FILTER_KEY);
-		if (stored === "teach" || stored === "all" || stored === "practice") setKindFilter(stored);
+		if (stored === "teach" || stored === "all" || stored === "practice" || stored === "read") setKindFilter(stored);
 	}, []);
 	const setFilter = useCallback((f: SessionKindFilter) => {
 		setKindFilter(f);
@@ -689,10 +692,10 @@ function SessionsSidebar() {
 					</Hint>
 				</div>
 
-				{/* Two doors, STACKED (owner round 8, 2026-10-05 — was a
+				{/* Three doors, STACKED (owner round 8, 2026-10-05 — was a
 				    half/half row): full-width rows read cleaner and give the
 				    labels room; teaching keeps the original draft route,
-				    practice carries its mode. */}
+				    practice and read carry their modes (read 2026-11-04). */}
 				<div className="mx-3 mb-2 flex flex-col gap-1.5">
 					<button
 						type="button"
@@ -713,6 +716,16 @@ function SessionsSidebar() {
 						<DumbbellIcon className="size-3" />
 						Practice
 						<span className="sr-only">create a new practice session</span>
+					</button>
+					<button
+						type="button"
+						data-testid="new-session-read"
+						onClick={() => router.push("/chat/new?mode=read")}
+						className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+					>
+						<BookOpenIcon className="size-3" />
+						Read
+						<span className="sr-only">create a new reading session</span>
 					</button>
 				</div>
 
@@ -777,15 +790,15 @@ function SessionsSidebar() {
 					</Hint>
 				</div>
 
-				{/* The three-way filter, HEADING THE LIST (owner round 8b,
+				{/* The kind filter, HEADING THE LIST (owner round 8b,
 				    2026-10-05 — moved below the search): it scopes what the
 				    list shows, so it sits directly above it as a caption row;
-				    search stays the top muscle-memory target. Order: Teaching /
-				    Practice / All — the real modes first, "All" as the escape
-				    hatch on the right, mirroring the create-buttons above.
-				    Persisted client-side. */}
+				    search stays the top muscle-memory target. Order: Teach /
+				    Practice / Read / All — the real modes first, "All" as the
+				    escape hatch on the right, mirroring the create-buttons
+				    above. Persisted client-side. */}
 				<div className="mx-3 flex items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5" data-testid="session-kind-filter">
-					{(["teach", "practice", "all"] as const).map((f) => (
+					{(["teach", "practice", "read", "all"] as const).map((f) => (
 						<button
 							key={f}
 							type="button"
@@ -798,7 +811,7 @@ function SessionsSidebar() {
 									: "text-muted-foreground hover:text-foreground",
 							)}
 						>
-							{f === "teach" ? "Teaching" : f === "all" ? "All" : "Practice"}
+							{f === "teach" ? "Teach" : f === "practice" ? "Practice" : f === "read" ? "Read" : "All"}
 						</button>
 					))}
 				</div>

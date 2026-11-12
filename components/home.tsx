@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CornerDownLeftIcon, DumbbellIcon } from "lucide-react";
+import { BookOpenIcon, CornerDownLeftIcon, DumbbellIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
 import { MinimalHome } from "@/components/minimal-home";
 import { SetupDialog } from "@/components/setup-dialog";
@@ -87,12 +87,13 @@ export function Home({
 		}
 	}, [dictation.active]);
 
-	/* PRACTICE MODE (owner, 2026-10-04): the graph composer's teach |
-	 *  practice switch — practice creates a kind:"practice" session and
-	 *  may carry proposition picks from the chain table (the chip above
-	 *  the composer opens the picker; the picks seed the opening prompt).
-	 *  Not enforcing any input format — the picks are a convenience. */
-	const [mode, setMode] = useState<"teach" | "practice">("teach");
+	/* SESSION MODE (practice 2026-10-04; read 2026-11-04): the graph
+	 *  composer's teach | practice | read switch — practice creates a
+	 *  kind:"practice" session and may carry proposition picks from the
+	 *  chain table; read creates a kind:"read" session and writes a living
+	 *  study document instead (no graph picks). Not enforcing any input
+	 *  format — the picks are a convenience. */
+	const [mode, setMode] = useState<"teach" | "practice" | "read">("teach");
 	const [practiceProps, setPracticeProps] = useState<{ id: string; name: string; statement: string }[]>([]);
 	const [chainSelectOpen, setChainSelectOpen] = useState(false);
 	// The chain table is CONTROLLED off this id set (the lifted pick).
@@ -132,18 +133,22 @@ export function Home({
 		}
 		setBusy(true);
 		try {
-			// The map context (owner, 2026-10-04): picks in EITHER mode ride
-			// the CREATION as graphContext — the server writes a
+			// The map context (owner, 2026-10-04): picks in teach/practice
+			// ride the CREATION as graphContext — the server writes a
 			// graph-context marker as message[0] (a separate custom message
 			// before the learner's first user message, propositions + the
 			// chains among them); the prompt stays the learner's own words.
+			// READ sessions have no graph context: their material is the
+			// topic itself, written by the agent into the document pane.
 			const res = await fetch("/api/chats", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
 					title: t,
-					...(mode === "practice" ? { kind: "practice" } : {}),
-					...(practiceProps.length > 0 ? { graphContext: { propositions: practiceProps } } : {}),
+					...(mode === "practice" ? { kind: "practice" } : mode === "read" ? { kind: "read" } : {}),
+					...(mode !== "read" && practiceProps.length > 0
+						? { graphContext: { propositions: practiceProps } }
+						: {}),
 				}),
 			});
 			const { id } = (await res.json()) as { id: string };
@@ -219,7 +224,7 @@ export function Home({
 					    shows the pick HINT so the affordance is discoverable;
 					    teaching mode with nothing picked renders nothing. */}
 					<ComposerActions
-						picker={(practiceProps.length > 0 || mode === "practice") && (
+						picker={mode !== "read" && (practiceProps.length > 0 || mode === "practice") && (
 							<NodePickerControl
 								count={practiceProps.length}
 								onOpen={() => setChainSelectOpen(true)}
@@ -270,7 +275,13 @@ export function Home({
 								void start();
 							}
 						}}
-						placeholder={mode === "practice" ? "What do you want to practice?" : "What do you want to learn?"}
+						placeholder={
+							mode === "practice"
+								? "What do you want to practice?"
+								: mode === "read"
+									? "What do you want to read about?"
+									: "What do you want to learn?"
+						}
 						autoFocus
 						rows={1}
 						className="field-sizing-content lh-input max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground"
@@ -295,7 +306,7 @@ export function Home({
 						turns={[] as TurnUsage[]}
 						leadingSlot={
 							<div className="flex items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5" data-testid="home-mode-switch">
-								{(["teach", "practice"] as const).map((m) => (
+								{(["teach", "practice", "read"] as const).map((m) => (
 									<button
 										key={m}
 										type="button"
@@ -308,8 +319,12 @@ export function Home({
 												: "text-muted-foreground hover:text-foreground")
 										}
 									>
-										{m === "practice" ? <DumbbellIcon aria-hidden="true" className="size-3" /> : null}
-										{m === "teach" ? "Teach" : "Practice"}
+										{m === "practice" ? (
+											<DumbbellIcon aria-hidden="true" className="size-3" />
+										) : m === "read" ? (
+											<BookOpenIcon aria-hidden="true" className="size-3" />
+										) : null}
+										{m === "teach" ? "Teach" : m === "practice" ? "Practice" : "Read"}
 									</button>
 								))}
 							</div>

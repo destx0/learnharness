@@ -25,6 +25,10 @@ export default async function ChatPage({
 			chatId={chat.id}
 			title={chat.title}
 			kind={chat.kind ?? "teach"}
+			// The living study document (read sessions, 2026-11-04): the
+			// canonical guide rides the record; the pane starts from this and
+			// updates on document-changed.
+			initialDocument={chat.document ?? null}
 			// Wave D: the record IS native agent history — the client view is
 				// derived app-side (core/view.ts projectView; GET serves the same
 				// native messages).

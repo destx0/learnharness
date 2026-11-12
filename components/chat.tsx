@@ -45,9 +45,10 @@ import {
 } from "@/src/core";
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanMarginalia, planExists } from "@/components/plan-window";
+import { ReadPane, documentWriteInFlight } from "@/components/read-pane";
 import { MermaidOverlay, SessionMermaidContext } from "@/components/session-overlay";
 import { AbortTurnDialog, type AbortMode } from "@/components/abort-turn-dialog";
-import { ArrowRightIcon, DumbbellIcon, WaypointsIcon } from "lucide-react";
+import { ArrowRightIcon, BookOpenIcon, DumbbellIcon, WaypointsIcon } from "lucide-react";
 import type { PlanBlockData } from "@/src/core";
 import { QuestionDock } from "@/components/question-dock";
 import { SessionFind } from "@/components/session-find";
@@ -56,7 +57,7 @@ import { PracticeDock } from "@/components/practice-dock";
 import { ThinkingCard, type PracticeThinkingData } from "@/components/practice-cards";
 import { GraphContextCard, type GraphContextData } from "@/components/graph-context-card";
 import { TopBar } from "@/components/top-bar";
-import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, QuestionFormDraft, TurnUsage, SessionPricing } from "@/src/core";
+import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, QuestionFormDraft, StudyDocument, TurnUsage, SessionPricing } from "@/src/core";
 import type { LhViewMessage } from "@/src/core";
 import { PhaseChip, PhaseDivider } from "@/components/phase-divider";
 import {
@@ -202,6 +203,7 @@ export function Chat({
 	initiallyInFlight,
 	initiallyCompacting = false,
 	initialConfigured = false,
+	initialDocument = null,
 	kind = "teach",
 }: {
 	chatId: string;
@@ -209,10 +211,13 @@ export function Chat({
 	initialMessages: LhMessage[];
 	/** Memory-only settlement notice supplied on reopening. */
 	initialError?: string;
-	/** The session kind (practice sessions, owner 2026-10-04): practice
-	 *  renders no phase chip (no probe→teach arc applies) and a Practice
-	 *  tag rides the header instead. */
-	kind?: "teach" | "practice";
+	/** The session kind (practice 2026-10-04; read 2026-11-04): practice
+	 *  renders no phase chip and a Practice tag; read renders a Read tag,
+	 *  the reading pane, and no coverage ring. */
+	kind?: "teach" | "practice" | "read";
+	/** The read session's living document at page load (the record already
+	 *  carries it; the pane refetches on document-changed). */
+	initialDocument?: StudyDocument | null;
 	initialPrompt?: string;
 	/** A teacher turn is running server-side but attached to no client
 	 * (navigated away mid-turn, returned while in flight). */
@@ -816,6 +821,16 @@ export function Chat({
 	// (invisible, clickable) button in the bottom-right whenever a question
 	// was pending with no plan yet (owner report, UI round 2026-10-01).
 	const hasPlan = useMemo(() => planExists(messages), [messages]);
+	/* THE READING PANE (read sessions, 2026-11-04): open by default — the
+	 * document is the mode's whole point — collapsible through the
+	 * Document chip. `writingDocument` keys on the live edit_document tool
+	 * part, not the turn's busy flag: the agent may be answering a chat
+	 * question without touching the document. */
+	const [readPaneOpen, setReadPaneOpen] = useState(true);
+	const writingDocument = useMemo(
+		() => kind === "read" && documentWriteInFlight(messages),
+		[kind, messages],
+	);
 	// The coverage ring's refresh chain (extraction-UX redesign): bumped at
 	// turn settle — the moment this session's uncovered mass changes.
 	const [coverageTick, setCoverageTick] = useState(0);
@@ -1290,16 +1305,42 @@ export function Chat({
 						</button>
 </Hint>
 					)}
+					{/* The reading-pane toggle (read sessions, 2026-11-04): the
+					    document is open by default; this chip is the reopen
+					    affordance after a collapse (and the overlay trigger at
+					    narrow widths). */}
+					{kind === "read" && (
+						<Hint label={readPaneOpen ? "Hide the document" : "Show the document"} side="bottom">
+							<button
+								type="button"
+								data-testid="document-chip"
+								aria-pressed={readPaneOpen}
+								onClick={(e) => {
+									blurAfterPointerClick(e);
+									setReadPaneOpen((open) => !open);
+								}}
+								className={
+									"lh-no-drag flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium uppercase tracking-wide transition-colors " +
+									(readPaneOpen
+										? "border-border bg-accent text-foreground"
+										: "border-border/80 text-muted-foreground hover:border-border hover:text-foreground")
+								}
+							>
+								<BookOpenIcon className="size-3.5" aria-hidden />
+								Document
+							</button>
+						</Hint>
+					)}
 					{/* The extraction ring (owner-locked redesign, 2026-09-24): fills
 					    with uncovered vs the chunk threshold, pulses while a run is in
 					    flight, vanishes when the graph is off. Click → the exact
 					    numbers. Before the phase label — the chips cluster right. */}
-					{/* Practice (owner, 2026-10-04): the coverage ring hides —
-				    practice never extracts, so an ever-filling ring with no
-				    run behind it would lie. */}
-					{kind !== "practice" && <CoverageRing chatId={chatId} refreshKey={coverageTick} />}
-					{/* Practice sessions: no phase arc — a quiet Practice tag
-					    instead of the phase chip. */}
+					{/* Practice (owner, 2026-10-04) and read (2026-11-04): the
+				    coverage ring hides — neither extracts, so an ever-filling
+				    ring with no run behind it would lie. */}
+					{kind === "teach" && <CoverageRing chatId={chatId} refreshKey={coverageTick} />}
+					{/* Practice/read sessions: no phase arc — a quiet tag instead
+					    of the phase chip. */}
 					{kind === "practice" ? (
 						<span
 							data-testid="phase-chip"
@@ -1309,6 +1350,16 @@ export function Chat({
 						>
 							<DumbbellIcon className="size-3" />
 							Practice
+						</span>
+					) : kind === "read" ? (
+						<span
+							data-testid="phase-chip"
+							data-phase="read"
+							aria-hidden="true"
+							className="pointer-events-none flex shrink-0 select-none items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+						>
+							<BookOpenIcon className="size-3" />
+							Read
 						</span>
 					) : (
 						<PhaseChip phase={phases.at(-1) ?? "probe"} />
@@ -1323,8 +1374,12 @@ export function Chat({
 						<div data-session-find-root="" className={`${COLUMN} flex flex-1 flex-col gap-4 pt-4`}>
 							{messages.length === 0 && !busy && (
 								<ConversationEmptyState
-									title="New session"
-									description="The teacher will open by probing what you already know."
+									title={kind === "read" ? "New reading session" : "New session"}
+									description={
+										kind === "read"
+											? "The agent will write a living study document you can read and steer."
+											: "The teacher will open by probing what you already know."
+									}
 								/>
 							)}
 
@@ -1654,7 +1709,13 @@ export function Chat({
 							// applies.
 							nextProblem={nextReady}
 							onNext={sendNext}
-							placeholder={nextReady ? "Ask anything, or press Enter for the next one." : undefined}
+							placeholder={
+								kind === "read"
+									? "Ask about the topic, or say what to expand…"
+									: nextReady
+										? "Ask anything, or press Enter for the next one."
+										: undefined
+							}
 						/>
 					}
 					onSubmitAnswer={(output) => {
@@ -1694,6 +1755,21 @@ export function Chat({
 				<AbortTurnDialog mode={abortAsk} onClose={() => setAbortAsk(null)} onConfirm={confirmAbort} busy={busy} />
 				</div>
 			</div>
+
+			{/* THE READING PANE (read sessions, 2026-11-04): a full-height
+			    sibling of the chat column at wide widths (the split view);
+			    a full-viewport overlay below lg, where there is no room for
+			    two readable columns. The pane owns its own scroll. */}
+			{kind === "read" && readPaneOpen && (
+				<ReadPane
+					chatId={chatId}
+					initialDocument={initialDocument}
+					sessionTitle={titleText}
+					writing={writingDocument}
+					onClose={() => setReadPaneOpen(false)}
+					className="fixed inset-0 z-40 lg:static lg:z-auto lg:w-[44%] lg:min-w-[22rem] lg:max-w-[52rem] lg:shrink-0"
+				/>
+			)}
 		</div>
 		</JobsContext.Provider>
 		</SessionMermaidContext.Provider>

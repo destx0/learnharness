@@ -23,6 +23,7 @@ import type {
 	Position,
 	CoverageEntry,
 	SessionCheckpoint,
+	StudyDocument,
 	TurnUsage,
 	NotesSource,
 } from "./contracts.ts";
@@ -32,9 +33,9 @@ import type { UserSettings } from "./settings.ts";
 
 export interface ChatStore {
 	/** Create a session record (persisted immediately). */
-	/** Create a session record; kind "practice" marks a practice session
-	 *  (absent = teach, the default). */
-	createChat(title: string, kind?: "practice"): ChatRecord;
+	/** Create a session record; kind "practice" marks a practice session,
+	 *  "read" a reading session (absent = teach, the default). */
+	createChat(title: string, kind?: "practice" | "read"): ChatRecord;
 	/** The full record, or null if unknown id / corrupt file. */
 	getChat(id: string): ChatRecord | null;
 	/** All sessions, newest activity first (the sidebar's list view). */
@@ -44,6 +45,9 @@ export interface ChatStore {
 	saveMessages(id: string, messages: LhMessage[]): void;
 	/** Persist the session plan tree (plan tools call this in execute). */
 	saveTree(id: string, tree: PlanTree): void;
+	/** Persist the living study document (the read agent's edit_document
+	 *  tool calls this in execute; teach/practice sessions never do). */
+	saveDocument(id: string, document: StudyDocument): void;
 	/** Append one usage entry to the record's turn log (the money channel,
 	 * 2026-09): idempotent per turn id — each request carries its own, so
 	 * a turn persisted twice appends once while continuation turns (which

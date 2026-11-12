@@ -161,3 +161,16 @@ describe("SessionRow practice badge (practice sessions, 2026-10-04)", () => {
 		assert.match(html, /Problem waiting ·/);
 	});
 });
+
+describe("SessionRow read badge (read sessions, 2026-11-04)", () => {
+	it("a read row carries the book badge", () => {
+		const html = render(item({ kind: "read" }));
+		assert.match(html, /aria-label="Reading session"/);
+	});
+
+	it("a teaching row carries neither the book nor the dumbbell", () => {
+		const html = render(item({ kind: "teach" }));
+		assert.doesNotMatch(html, /Reading session/);
+		assert.doesNotMatch(html, /Practice session/);
+	});
+});

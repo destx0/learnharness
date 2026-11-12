@@ -47,6 +47,10 @@ export * from "./input-events.ts";
 // the deleted server projection to the client side. Pure, browser-safe.
 export * from "./view.ts";
 export * from "./tool-parts.ts";
+// The living study document (read sessions, 2026-11-04): pure types +
+// validation/patch engine. Browser-safe — the read pane and the tool both
+// consume it.
+export * from "./study-document.ts";
 export * from "./answer-presentation.ts";
 export * from "./prices.ts";
 export * from "./context-usage.ts";

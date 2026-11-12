@@ -12,7 +12,7 @@ import * as path from "node:path";
 import { PATHS } from "../../config.ts";
 import { emit } from "../core/events.ts";
 import type { ChatStore } from "../core/ports.ts";
-import type { ChatRecord, ChatSettings, ChatSummary, ExtractionRunUsage, PlanTree, TurnUsage } from "../core/contracts.ts";
+import type { ChatRecord, ChatSettings, ChatSummary, ExtractionRunUsage, PlanTree, StudyDocument, TurnUsage } from "../core/contracts.ts";
 import { CURRENT_CHAT_VERSION } from "../core/contracts.ts";
 import type { LhMessage } from "../core/native-messages.ts";
 import { activeProblemOf, danglingQuestionOf } from "../core/native-messages.ts";
@@ -32,7 +32,7 @@ function chatFile(id: string): string {
  *  phase, busy, pendingQuestion) is already announced by turn-started /
  *  turn-settled, which the sidebar refetches on. Silence here is law,
  *  not oversight. */
-function createChat(title: string, kind?: "practice"): ChatRecord {
+function createChat(title: string, kind?: "practice" | "read"): ChatRecord {
 	const now = new Date().toISOString();
 	const record: ChatRecord = {
 		id: `chat_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`,
@@ -40,9 +40,9 @@ function createChat(title: string, kind?: "practice"): ChatRecord {
 		createdAt: now,
 		updatedAt: now,
 		messages: [],
-		// Practice sessions carry the marker; teach stays ABSENT (absence
-		// reads as teach — pre-practice records never migrate).
-		...(kind === "practice" ? { kind: "practice" as const } : {}),
+		// Practice/read sessions carry the marker; teach stays ABSENT
+		// (absence reads as teach — pre-practice records never migrate).
+		...(kind ? { kind } : {}),
 	};
 	fs.mkdirSync(PATHS.chats, { recursive: true });
 	writeChat(record);
@@ -84,7 +84,7 @@ function listChats(): ChatSummary[] {
 			.filter((f) => f.endsWith(".json"))
 			.map((f) => getChat(f.slice(0, -5)))
 			.filter((r): r is ChatRecord => r !== null)
-			.map(({ messages, tree, turns, extractions, ...summary }) => {
+			.map(({ messages, tree, document, turns, extractions, ...summary }) => {
 				// Per-record isolation (Wave B): a record whose messages fail the
 				// projection (e.g. pre-Wave-B UIMessage-format scratch — the
 				// zero-back-compat wipe makes these "corrupt") must not blank the
@@ -205,12 +205,23 @@ function saveTree(id: string, tree: PlanTree): void {
 	writeChat(record);
 }
 
+/** Persist the living study document (the read agent's document tool). Like
+ *  saveTree, an edit is not a separate conversation activity — the turn's
+ *  saveMessages carries the update — so updatedAt deliberately stays put. */
+function saveDocument(id: string, document: StudyDocument): void {
+	const record = getChat(id);
+	if (!record) throw new Error(`Chat not found: ${id}`);
+	record.document = document;
+	writeChat(record);
+}
+
 export const chatStore: ChatStore = {
 	createChat,
 	getChat,
 	listChats,
 	saveMessages,
 	saveTree,
+	saveDocument,
 	saveSettings,
 	renameChat,
 	deleteChat,

@@ -1,0 +1,192 @@
+/**
+ * THE READ AGENT (read sessions, 2026-11-04): the documentation-only mode.
+ * These pins hold the three seams that make it a different mode rather than
+ * a teaching variant:
+ *   - the prompt composes the read base + doctrine + the curated shared
+ *     appendix, and carries none of the teaching apparatus;
+ *   - the tool registry is document + learner files + research/PDF ONLY —
+ *     no quiz, ask, plan, probe, problem, demo, or visual tools;
+ *   - a turn ending on internal document work owes NO continuation (the
+ *     phantom-wake guard).
+ */
+
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
+
+import type { ChatRecord } from "../src/core/contracts.ts";
+import type { ChatStore, JobStore } from "../src/core/ports.ts";
+import type { LhMessage } from "../src/core/native-messages.ts";
+import { needsContinuation } from "../src/core/native-messages.ts";
+import { buildCompactionPrompt } from "../src/core/compaction.ts";
+import { EDIT_DOCUMENT_TOOL, READ_DOCUMENT_TOOL } from "../src/core/contracts/chat.ts";
+import { composeInstructions } from "../src/agent/teacher-agent.ts";
+import { createReadTools } from "../src/agent/tools.ts";
+import { allSegmentPaths } from "../src/agent/prompt-segments.ts";
+
+const NOW = "2026-11-04T12:00:00.000Z";
+
+function record(): ChatRecord {
+	return {
+		id: "c_read",
+		title: "Linear algebra",
+		createdAt: NOW,
+		updatedAt: NOW,
+		messages: [],
+		kind: "read",
+	};
+}
+
+/** The narrow store surface the document tools use. */
+function fakeStore(initial: ChatRecord) {
+	let current = initial;
+	const store = {
+		getChat: (id: string) => (id === current.id ? current : null),
+		saveDocument: (_id: string, document: NonNullable<ChatRecord["document"]>) => {
+			current = { ...current, document };
+		},
+	} as unknown as ChatStore;
+	return { store, get: () => current };
+}
+
+const jobStore = {} as JobStore;
+const spawn = () => {};
+
+function toolsOf(store: ChatStore) {
+	return createReadTools({
+		chatId: "c_read",
+		chatStore: store,
+		jobStore,
+		spawn,
+		searchAvailable: () => true,
+	});
+}
+
+describe("the read agent's prompt", () => {
+	it("composes the documentation base + doctrine and the shared appendix", () => {
+		const prompt = composeInstructions("read");
+		assert.match(prompt, /living study document/);
+		assert.match(prompt, /edit_document/);
+		assert.match(prompt, /No quizzes/);
+		// Shared appendix: voice + learner files + formatting.
+		assert.match(prompt, /No enthusiasm, praise, or performed reaction/);
+		assert.match(prompt, /## Learner files/);
+		assert.match(prompt, /he receives documents, not chat messages/i);
+		// Teaching apparatus stays out.
+		assert.doesNotMatch(prompt, /probe_done/);
+		assert.doesNotMatch(prompt, /plan_init/);
+	});
+
+	it("is a discoverable prompt segment set (overrides can target it)", () => {
+		const paths = allSegmentPaths();
+		assert.ok(paths.includes("read/00-base.md"));
+		assert.ok(paths.includes("read/10-doctrine.md"));
+		assert.ok(paths.includes("shared/10-voice.md"));
+	});
+});
+
+describe("the read agent's tool registry", () => {
+	it("holds document + files + research/PDF only", () => {
+		const { store } = fakeStore(record());
+		const keys = Object.keys(toolsOf(store)).sort();
+		assert.deepEqual(keys, [
+			"edit_document",
+			"find",
+			"grep",
+			"ls",
+			"pdf",
+			"read",
+			"read_document",
+			"research",
+		]);
+	});
+
+	it("creates the living document through edit_document and reads it back", async () => {
+		const { store, get } = fakeStore(record());
+		const tools = toolsOf(store);
+		const created = await tools[EDIT_DOCUMENT_TOOL]!.execute("call_1", {
+			title: "Linear algebra — a working overview",
+			sections: [
+				{ id: "overview", heading: "Overview", body: "Vectors are the nouns." },
+				{ id: "maps", heading: "Linear maps", body: "Maps preserve addition and scaling." },
+			],
+		} as never);
+		const createdDetails = created.details as { ok?: boolean; revision?: number };
+		assert.equal(createdDetails.ok, true);
+		assert.equal(createdDetails.revision, 1);
+		assert.equal(get().document?.sections.length, 2);
+		assert.equal(get().document?.title, "Linear algebra — a working overview");
+
+		const read = await tools[READ_DOCUMENT_TOOL]!.execute("call_2", { sectionId: "maps" } as never);
+		const readBody = (read.details as { sections?: Array<{ id: string; body: string }> }).sections?.[0];
+		assert.equal(readBody?.id, "maps");
+		assert.match(readBody?.body ?? "", /preserve addition/);
+	});
+
+	it("returns validation problems to the model without writing", async () => {
+		const { store, get } = fakeStore(record());
+		const tools = toolsOf(store);
+		await tools[EDIT_DOCUMENT_TOOL]!.execute("call_1", { sections: [{ id: "x", heading: "X", body: "Y" }] } as never);
+		const result = await tools[EDIT_DOCUMENT_TOOL]!.execute("call_2", {
+			title: "T",
+			sections: [
+				{ id: "dup", heading: "Same", body: "One" },
+				{ id: "dup", heading: "Else", body: "Two" },
+			],
+		} as never);
+		assert.equal((result.details as { ok?: boolean }).ok, false);
+		assert.equal(get().document, undefined);
+	});
+});
+
+describe("the read session's turn boundaries", () => {
+	const STAMPS = {
+		api: "faux",
+		provider: "test",
+		model: "test-model",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "toolUse",
+	} as const;
+
+	it("does not owe a continuation after a document edit", () => {
+		const call: LhMessage & AssistantMessage = {
+			id: "m1",
+			role: "assistant",
+			content: [{ type: "toolCall", id: "call_doc", name: EDIT_DOCUMENT_TOOL, arguments: { title: "T" } }],
+			timestamp: 1,
+			...STAMPS,
+		};
+		const result: LhMessage & ToolResultMessage = {
+			id: "m2",
+			role: "toolResult",
+			toolCallId: "call_doc",
+			toolName: EDIT_DOCUMENT_TOOL,
+			content: [{ type: "text", text: '{"ok":true}' }],
+			details: { ok: true },
+			isError: false,
+			timestamp: 2,
+		};
+		assert.equal(needsContinuation([call, result]), false);
+	});
+
+	it("a read compaction keeps the steering and the TOC, not the teaching arc", () => {
+		const prompt = buildCompactionPrompt({
+			spanText: "[LEARNER] expand the maps section",
+			planTreeText: null,
+			kind: "read",
+			documentText: "Title: Linear algebra\nSections:\n- Overview (overview)",
+		});
+		assert.match(prompt, /The learner's steering/);
+		assert.match(prompt, /The document's current state/);
+		assert.match(prompt, /read_document/);
+		assert.match(prompt, /- Overview \(overview\)/);
+		assert.doesNotMatch(prompt, /The plan dependency tree/);
+	});
+});

@@ -5,6 +5,7 @@ import { JobCard, PdfJobCard } from "@/components/artifacts/job-card";
 import { VisualCard } from "@/components/artifacts/visual-card";
 import { ProbeDoneCard } from "@/components/artifacts/probe-done-card";
 import { ToolCallCard } from "@/components/artifacts/tool-call-card";
+import { DocumentCard } from "@/components/artifacts/document-card";
 import { ProblemCard, ConcludeCard } from "@/components/practice-cards";
 
 /**
@@ -50,4 +51,9 @@ export const artifactRenderers: Record<string, ComponentType<ArtifactPartProps>>
 	// discipline (their results are pre-formatted strings too).
 	list_sessions: ToolCallCard,
 	list_propositions: ToolCallCard,
+	// Read sessions (2026-11-04): the document body lives in the reading
+	// pane; the transcript gets one quiet "Document updated · …" line.
+	// read_document stays invisible — it is the agent's own recall, not an
+	// event the learner needs to read.
+	edit_document: DocumentCard,
 };

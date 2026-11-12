@@ -43,4 +43,25 @@ describe("session kind (practice sessions, 2026-10-04)", () => {
 		const listed = chatStore.listChats().find((c) => c.id === chat.id);
 		assert.equal(listed?.kind, "teach");
 	});
+
+	it("createChat(kind: 'read') stamps the reading marker on record + list", () => {
+		const chat = chatStore.createChat("read session", "read");
+		assert.equal(chat.kind, "read");
+		const listed = chatStore.listChats().find((c) => c.id === chat.id);
+		assert.equal(listed?.kind, "read");
+	});
+
+	it("the living document rides the record but stays OUT of the list payload", () => {
+		const chat = chatStore.createChat("read with a guide", "read");
+		chatStore.saveDocument(chat.id, {
+			title: "A guide",
+			sections: [{ id: "overview", heading: "Overview", body: "Body." }],
+			revision: 1,
+			updatedAt: new Date().toISOString(),
+		});
+		assert.equal(chatStore.getChat(chat.id)?.document?.title, "A guide");
+		const listed = chatStore.listChats().find((c) => c.id === chat.id);
+		assert.ok(listed);
+		assert.equal("document" in listed!, false, "the sidebar list must not carry the whole guide");
+	});
 });

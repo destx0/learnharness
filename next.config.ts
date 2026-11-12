@@ -67,6 +67,12 @@ const nextConfig: NextConfig = {
 	// caught it; unit tests run unbundled and never see it.
 	outputFileTracingIncludes: {
 		"*": [
+			// The agent's system prompts are read from disk at request time
+			// (src/agent/prompt-segments.ts): the tracer cannot see the
+			// readdir/readFile pair, so the whole runtime-read tree ships
+			// explicitly. This includes the read agent's fragments
+			// (2026-11-04) alongside prober/teacher/practice.
+			"src/agent/prompts/**/*",
 			// The standalone trace omitted this entire runtime-imported directory
 			// in 0.3.0, so importing puppeteer-core failed before browser startup.
 			"node_modules/@puppeteer/browsers/lib/browser-data/**/*.js",

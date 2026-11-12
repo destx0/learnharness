@@ -1,10 +1,10 @@
 # Prompt fragments
 
-System prompts are composed at agent construction (src/agent/teacher-agent.ts), one composition per agent — the probe/teach split (docs/probe-teach-split.md):
+System prompts are composed at agent construction (src/agent/teacher-agent.ts), one composition per agent — the probe/teach split (docs/probe-teach-split.md), practice (2026-10-04), and read (2026-11-04):
 
-1. `src/agent/system-prompt.md` — the SHARED base: the agent intro, the voice, the philosophy (why the system exists), and the accuracy rule. The teaching method (Principle i / Principle ii, the click, the arc, the hedge) lives in `teacher/05-method.md` — teacher-only since the prober never teaches.
-2. Every numeric-prefix `*.md` fragment in the agent's directory (`prober/` or `teacher/`), in **sorted filename order**, joined with `---` separators. The agent's own job and method LEAD the composition (the 2026-09-27 reorder). The loader enforces the numeric prefix (`\d*-*.md`) — other files (like this README) never enter the model's prompt.
-3. The `shared/` fragments, as a trailing appendix (tool/file/format mechanics).
+1. `src/agent/system-prompt.md` — the SHARED base: the agent intro, the voice, the philosophy (why the system exists), and the accuracy rule. The teaching method (Principle i / Principle ii, the click, the arc, the hedge) lives in `teacher/05-method.md` — teacher-only since the prober never teaches. Practice and read compose their own bases instead of this one.
+2. Every numeric-prefix `*.md` fragment in the agent's directory (`prober/`, `teacher/`, `practice/`, or `read/`), in **sorted filename order**, joined with `---` separators. The agent's own job and method LEAD the composition (the 2026-09-27 reorder). The loader enforces the numeric prefix (`\d*-*.md`) — other files (like this README) never enter the model's prompt.
+3. The `shared/` fragments, as a trailing appendix (tool/file/format mechanics) — practice and read use curated allowlists rather than the whole appendix (see prompt-segments.ts).
 
 Rules for adding a fragment:
 

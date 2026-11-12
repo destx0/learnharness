@@ -25,7 +25,7 @@ Hold the architecture along two orthogonal axes:
 
 | System | Owns (sole writer) | Role |
 |---|---|---|
-| **Classroom** — session engine | `data/chats/*.json` | the turn pipeline, prober→teacher, plan tree, questions, phases |
+| **Classroom** — session engine | `data/chats/*.json` | the turn pipeline, prober→teacher, plan tree, questions, phases; practice and read session kinds (read owns the living study document) |
 | **Workbench** — background labor | `data/jobs/*.json` | job runner, researcher/demo-builder/visual-maker, steer delivery |
 | **Library** — world model | `data/graph/*` ledgers | extraction pipeline (sole graph writer), derivation, birth-session clusters |
 | **Practice** — problem sets | `data/practice/*.json` | partitioner→generator→grader pipeline, self-contained sets (§7) |
@@ -172,7 +172,7 @@ The engine side is adapted too: `src/agent/models.ts` (`piEngineFor`) resolves e
 flowchart LR
     subgraph DRIVING["DRIVING ADAPTERS — inbound"]
         BROWSER["Browser UI — components/: question dock (addToolOutput) · graph canvas · docks"]
-        HTTP["HTTP transport — app/api/*: 28 route handlers"]
+        HTTP["HTTP transport — app/api/*: 29 route handlers"]
         NOTES["Notes front door — POST /api/graph/import"]
         ELEC["Electron main — thin launcher, spawns server, LH_DATA_DIR + BYOK env"]
     end
@@ -305,6 +305,8 @@ sequenceDiagram
 
 - **Client-side question tools** (`quiz`, `ask_user_question`) have no server execute: the call streams to the browser, the learner answers in the dock, the client grades via `question-core` and returns the verdict with `addToolOutput`, which fires the continuation. A pending quiz persisted in the record is exactly what makes **resume mid-question free**. Deterministic seeded shuffling (keyed by toolCallId) keeps server and client renders identical.
 - **The prober→teacher handoff**: the first turn(s) run the prober (floor/ceiling via quiz, goal via ask); `probe_done` (server-executed) files the assessment and queues a handoff steer; from the first `tool-probe_done` part in the transcript, the handler builds the teacher agent for every later turn. Phases (`core/phases.ts`) fold strictly: probe → plan → teach.
+- **Practice and read are different session kinds, not phases.** Practice builds its problem-solving agent from turn 1. Read (2026-11-04) builds the documentation-only reader from turn 1: its registry is `edit_document`/`read_document` + learner files + research/PDF (no quiz, ask, plan, probe, problem, demo, or visual tools). The living study document lives on `ChatRecord.document`, written only by `edit_document` through `ChatStore.saveDocument`; `document-changed` updates the reading pane without touching the streaming transcript. Neither kind extracts.
+- **READ turn boundaries**: a clean `edit_document`/`read_document` result never owes a continuation (`needsContinuation`), so a turn ending on internal document work cannot wake a phantom turn after reload.
 - **The formal plan tree is author-once**: the teacher authors the session's dependency map with a single schema-validated `plan_init` tool (a mermaid-subset graph, parsed deterministically with line-numbered errors, validated as a DAG). Progress is never mutated — statuses (`current`/`visited`/upcoming) are **derived** from tagged quiz calls in the transcript; the tree panel and the plan blocks render that derivation.
 - **Job tools are server-executed, ack-and-steer**: `research`/`demo`/`visual` resolve immediately mid-turn with a fire-and-forget ack (the teacher keeps teaching); `spawn(job, input)` fires the background runner.
 - Turn services are named seams taking explicit dependencies. Extraction contains its errors, but **canonical persistence must not fail silently**: a failed input write refuses acceptance without starting an agent; `persistTurn` throws on a failed reply write. The runner reports settlement failure before `[DONE]` and releases liveness even when normal settlement fails. Steer reconciliation uses the durable record, so a later bookkeeping failure cannot replay already-saved learner input.
@@ -497,12 +499,13 @@ Before 2026-10-02 the client discovered server-side change by polling: a lattice
 | `jobs-changed` | `{chatId}` | every job-store write (create/update/delete-that-removed) |
 | `activity-changed` | `{}` | extraction `setPhase`/`finishExtraction`; practice `registerRow`/phase-writes/`finishPractice` |
 | `chats-changed` | `{}` | list-shape writes only: chat create/rename/delete-that-removed |
+| `document-changed` | `{chatId}` | the read agent's `edit_document` execute after `saveDocument` — the reading pane refetches `GET /api/chats/:id/document` |
 
 ### 10.3 Emitter laws
 
 - **Notify-after-write** — the emit always follows the successful write, so a fetch triggered by the event reads committed truth.
 - **Present-entry gating** — mutations that changed nothing (missing-id update, delete of an absent row) emit nothing.
-- **THE SILENCE LAW** — content writers (`saveMessages`, `appendTurnUsage`, `appendExtractionUsage`, `saveSettings`, `saveTree`) are deliberately silent: `saveMessages` would spam per turn-persist, and list-visible effects already arrive via `turn-started`/`turn-settled` (pinned in tests).
+- **THE SILENCE LAW** — content writers (`saveMessages`, `appendTurnUsage`, `appendExtractionUsage`, `saveSettings`, `saveTree`, `saveDocument`) are deliberately silent: `saveMessages` would spam per turn-persist, and list-visible effects already arrive via `turn-started`/`turn-settled` (pinned in tests). `saveDocument` stays silent too; the `edit_document` tool is what emits `document-changed` after the write.
 - **Reads never emit** — pure reads are side-effect-free (pinned).
 
 The bus itself is a `globalThis`-backed listener set (the Next per-entry-module discipline, same as the turn registry), snapshot-iterated so unsubscribing mid-emit is safe, with per-listener error isolation.

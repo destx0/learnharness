@@ -16,6 +16,7 @@ import { filterEnabledTools, type EnabledTools } from "../core/pending.ts";
 import type { JobRecord } from "../core/contracts.ts";
 import type { JobStore } from "../core/ports.ts";
 import { jobTools, type DemoInput, type PdfInput, type ResearchInput, type VisualInput } from "./tools/jobs.ts";
+import { documentTools, type DocumentToolContext } from "./tools/document.ts";
 import { planTools, type PlanToolContext } from "./tools/plan.ts";
 import { probeDoneTool, type ProbeDoneContext } from "./tools/probe.ts";
 import { proberGraphTools } from "./tools/graph.ts";
@@ -429,6 +430,49 @@ function withoutMechanics(enabled?: EnabledTools): EnabledTools | undefined {
 	if (!enabled) return undefined;
 	const { explain: _e, quiz: _q, ...rest } = enabled;
 	return rest;
+}
+
+/** The READ agent's tool context (read sessions, 2026-11-04): the document
+ *  store seam + the side-tool wiring (research/PDF + learner files). No
+ *  graph readers, no plan tools, no question tools, no demo/visual. */
+export interface ReadToolContext extends DocumentToolContext {
+	jobStore: JobStore;
+	spawn: (job: JobRecord, input: ResearchInput | DemoInput | VisualInput | PdfInput) => void;
+	searchAvailable?: () => boolean;
+}
+
+/**
+ * The READ agent's registry: the two document tools + the learner-filesystem
+ * set + research and PDF jobs. Deliberately absent: quiz/explain/ask (this
+ * mode has no questions), plan_init, probe_done, demo/visual (diagrams are
+ * authored inline as mermaid, not dispatched artifacts), and graph readers.
+ * The job tools remain user-toggleable through the same settings seam as
+ * every other agent.
+ */
+export function createReadTools(
+	ctx: ReadToolContext,
+	enabled?: EnabledTools,
+): Record<string, AgentTool<any>> {
+	const jobs = jobTools({
+		chatId: ctx.chatId,
+		jobStore: ctx.jobStore,
+		spawn: ctx.spawn,
+		searchAvailable: ctx.searchAvailable,
+	});
+	return healToolRecord(
+		filterEnabledTools(
+			{
+				...documentTools({ chatId: ctx.chatId, chatStore: ctx.chatStore }),
+				read: readTool,
+				ls: lsTool,
+				find: findTool,
+				grep: grepTool,
+				...(jobs.research ? { research: jobs.research } : {}),
+				...(jobs.pdf ? { pdf: jobs.pdf } : {}),
+			},
+			enabled,
+		),
+	);
 }
 
 export function createTeacherTools(

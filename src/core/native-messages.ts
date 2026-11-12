@@ -38,8 +38,10 @@ import type { AssistantMessage, Message, ToolResultMessage, UserMessage } from "
 import { QUESTION_TOOLS } from "./pending.ts";
 import {
 	CONCLUDE_ACK_TEXT,
+	EDIT_DOCUMENT_TOOL,
 	HANDOFF_TEXT,
 	NEXT_PROBLEM_TEXT,
+	READ_DOCUMENT_TOOL,
 	THINKING_LABEL,
 } from "./contracts/chat.ts";
 import { compactAnswerForModel, type QuestionAnswerData } from "./question-core.ts";
@@ -812,6 +814,14 @@ export function needsContinuation(messages: readonly LhMessage[]): boolean {
 		(m) => m.toolName === PRACTICE_PROBLEM_TOOL && !m.isError && m.details == null,
 	);
 	if (posedProblem) return false;
+	// READ SESSIONS (2026-11-04): document reads/writes are internal work,
+	// not a dispatch the agent owes a continuation for. Without this a turn
+	// ending right after edit_document/read_document would wake a phantom
+	// continuation turn on reload.
+	const internalDocumentWork = results.some(
+		(m) => (m.toolName === EDIT_DOCUMENT_TOOL || m.toolName === READ_DOCUMENT_TOOL) && !m.isError,
+	);
+	if (internalDocumentWork) return false;
 	const answered = new Set(results.map((m) => m.toolCallId));
 	const calls = (content as Array<{ type?: string; id?: string }>).filter(
 		(b) => b.type === "toolCall" && typeof b.id === "string",

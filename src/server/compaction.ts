@@ -39,6 +39,7 @@ import {
 	newCompactionMarker,
 	planTreeToText,
 	serializeForSummary,
+	studyDocumentOutline,
 	toLlmMessages,
 	type CompactionDetails,
 	type LhMessage,
@@ -96,8 +97,8 @@ export interface CompactionDeps {
 	engine: PiEngine;
 	/** provider:id of the engine (usage + marker provenance). */
 	modelId: string;
-	/** The session kind (summarizer wording: tutor vs practice). */
-	kind: "teach" | "practice" | "probe";
+	/** The session kind (summarizer wording: tutor vs practice vs read). */
+	kind: "teach" | "practice" | "probe" | "read";
 	/** The effective trigger threshold, RESOLVED by the caller:
 	 *  min(settings threshold, contextWindow − reserve) — the owner's
 	 *  effective-trigger ruling. The catalog window lookup is the
@@ -208,6 +209,10 @@ async function compact(deps: CompactionDeps, chatId: string): Promise<void> {
 		spanText: fullSpan,
 		planTreeText: planTreeToText(record.tree, messages),
 		kind: deps.kind,
+		// READ sessions (2026-11-04): the guide itself is in the record, so
+		// the summary carries only its title + section list, and the future
+		// agent calls read_document for the full text.
+		documentText: deps.kind === "read" && record.document ? studyDocumentOutline(record.document) : null,
 	});
 
 	emit("compaction-changed", { chatId, running: true });

@@ -331,8 +331,11 @@ export function ReadGraphView({
 				data-testid="read-graph-canvas"
 				className="relative min-h-0 flex-1 cursor-grab overflow-hidden active:cursor-grabbing"
 				onPointerDown={(event) => {
-					dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false };
+					// A press on a node is a click, not a pan. Without this
+					// guard, pointer capture retargets the click to the canvas.
 					movedRef.current = false;
+					if ((event.target as Element | null)?.closest?.("[data-read-graph-node]")) return;
+					dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false };
 					event.currentTarget.setPointerCapture(event.pointerId);
 				}}
 				onPointerMove={(event) => {
@@ -385,6 +388,7 @@ export function ReadGraphView({
 								return (
 									<g
 										key={node.id}
+										data-read-graph-node=""
 										transform={`translate(${node.x} ${node.y})`}
 										className="cursor-pointer"
 										role="button"

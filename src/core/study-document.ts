@@ -226,7 +226,7 @@ export function studyDocumentTreeText(record: Pick<ChatRecord, "document" | "doc
 			lines.push(`${pad}  Sections:`);
 			for (const section of doc.sections) {
 				const suggested = section.suggestions?.length
-					? ` [deeper: ${section.suggestions.map((t) => `${t.id} (${t.heading})`).join("; ")}]`
+					? ` [deeper: ${section.suggestions.map((t) => `${t.id} (${t.heading}${t.documentId ? ` → ${t.documentId}${t.sectionId ? ` § ${t.sectionId}` : ""}` : ""})`).join("; ")}]`
 					: "";
 				lines.push(`${pad}  - ${section.heading} (${section.id})${suggested}`);
 			}

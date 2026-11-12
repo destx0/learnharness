@@ -21,6 +21,7 @@ import type {
 	StudyDocumentStatus,
 	StudyRelatedLink,
 	StudySection,
+	StudySectionQuestion,
 	StudyTopicSuggestion,
 } from "./contracts/chat.ts";
 
@@ -46,6 +47,9 @@ export const STUDY_DEPTH_MAX = 6;
 export const STUDY_SUGGESTIONS_MAX = 6;
 export const STUDY_SUGGESTION_HEADING_MAX = 160;
 export const STUDY_SUGGESTION_BLURB_MAX = 240;
+export const STUDY_QUESTIONS_MAX = 6;
+export const STUDY_QUESTION_MAX = 300;
+export const STUDY_ANSWER_MAX = 4000;
 export const STUDY_RELATED_MAX = 12;
 export const STUDY_RELATED_REASON_MAX = 240;
 
@@ -55,6 +59,10 @@ export interface StudySectionPatch {
 	id: string;
 	heading?: string;
 	body?: string;
+	/** Replace this section's deeper directions (empty clears them). */
+	suggestions?: StudyTopicSuggestion[];
+	/** Replace this section's self-check questions (empty clears them). */
+	questions?: StudySectionQuestion[];
 }
 
 /** One edit_document call. At least one field must carry work. */
@@ -384,8 +392,8 @@ export function applyStudyDocumentEdit(
 		patched.add(patch.id);
 		const existing = byId.get(patch.id);
 		if (existing) {
-			if (patch.heading === undefined && patch.body === undefined) {
-				problems.push(`sections: "${patch.id}" has neither heading nor body to update`);
+			if (patch.heading === undefined && patch.body === undefined && patch.suggestions === undefined && patch.questions === undefined) {
+				problems.push(`sections: "${patch.id}" has no heading, body, suggestions or questions to update`);
 				continue;
 			}
 			if (patch.heading !== undefined) {
@@ -395,6 +403,14 @@ export function applyStudyDocumentEdit(
 			if (patch.body !== undefined) {
 				const body = validateBody(patch.body, `sections["${patch.id}"]`, problems);
 				if (body !== undefined) existing.body = body;
+			}
+			if (patch.suggestions !== undefined) {
+				if (patch.suggestions.length === 0) delete existing.suggestions;
+				else existing.suggestions = validateSuggestions(patch.suggestions, documentId, patch.id, problems);
+			}
+			if (patch.questions !== undefined) {
+				if (patch.questions.length === 0) delete existing.questions;
+				else existing.questions = validateQuestions(patch.questions, `sections["${patch.id}"].questions`, problems);
 			}
 			continue;
 		}
@@ -407,8 +423,20 @@ export function applyStudyDocumentEdit(
 			patch.body === undefined
 				? (problems.push(`sections: new section "${patch.id}" needs a body`), undefined)
 				: validateBody(patch.body, `sections["${patch.id}"]`, problems);
+		const suggestions = patch.suggestions && patch.suggestions.length > 0
+			? validateSuggestions(patch.suggestions, documentId, patch.id, problems)
+			: undefined;
+		const questions = patch.questions && patch.questions.length > 0
+			? validateQuestions(patch.questions, `sections["${patch.id}"].questions`, problems)
+			: undefined;
 		if (heading !== undefined && body !== undefined) {
-			const section: StudySection = { id: patch.id, heading, body };
+			const section: StudySection = {
+				id: patch.id,
+				heading,
+				body,
+				...(suggestions && suggestions.length > 0 ? { suggestions } : {}),
+				...(questions && questions.length > 0 ? { questions } : {}),
+			};
 			byId.set(section.id, section);
 			work.push(section);
 		}
@@ -525,6 +553,44 @@ function validateSuggestions(
 				...(suggestion.documentId && suggestion.sectionId ? { sectionId: suggestion.sectionId } : {}),
 			});
 		}
+	}
+	return out;
+}
+
+/** Validate a self-check question list. Empty is legal (clears the set).
+ *  Unique ids keep the accordion keys stable across revisions. */
+function validateQuestions(
+	questions: readonly StudySectionQuestion[],
+	label: string,
+	problems: string[],
+): StudySectionQuestion[] {
+	if (questions.length > STUDY_QUESTIONS_MAX) {
+		problems.push(`${label}: ${questions.length} questions; the limit is ${STUDY_QUESTIONS_MAX}`);
+	}
+	const out: StudySectionQuestion[] = [];
+	const seen = new Set<string>();
+	for (const [i, entry] of questions.entries()) {
+		const at = `${label}[${i}]`;
+		if (!entry || typeof entry !== "object") {
+			problems.push(`${at}: must be an object`);
+			continue;
+		}
+		if (typeof entry.id !== "string" || !STUDY_SECTION_ID_RE.test(entry.id)) {
+			problems.push(`${at}: invalid id "${String(entry.id)}" — use a lowercase slug`);
+			continue;
+		}
+		if (seen.has(entry.id)) {
+			problems.push(`${at}: "${entry.id}" appears more than once`);
+			continue;
+		}
+		seen.add(entry.id);
+		const question = typeof entry.question === "string" ? entry.question.trim() : "";
+		if (!question) problems.push(`${at}: question must not be empty`);
+		else if (question.length > STUDY_QUESTION_MAX) problems.push(`${at}: question is longer than ${STUDY_QUESTION_MAX} characters`);
+		const answer = typeof entry.answer === "string" ? entry.answer.trim() : "";
+		if (!answer) problems.push(`${at}: answer must not be empty`);
+		else if (answer.length > STUDY_ANSWER_MAX) problems.push(`${at}: answer is longer than ${STUDY_ANSWER_MAX} characters`);
+		if (question && answer) out.push({ id: entry.id, question, answer });
 	}
 	return out;
 }

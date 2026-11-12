@@ -77,7 +77,7 @@ describe("the read agent's prompt", () => {
 		const prompt = composeInstructions("read");
 		assert.match(prompt, /living study document/);
 		assert.match(prompt, /edit_document/);
-		assert.match(prompt, /No quizzes/);
+		assert.match(prompt, /No graded quiz/);
 		// Shared appendix: voice + learner files + formatting.
 		assert.match(prompt, /No enthusiasm, praise, or performed reaction/);
 		assert.match(prompt, /## Learner files/);
@@ -135,6 +135,25 @@ describe("the read agent's tool registry", () => {
 		const readBody = (read.details as { sections?: Array<{ id: string; body: string }> }).sections?.[0];
 		assert.equal(readBody?.id, "maps");
 		assert.match(readBody?.body ?? "", /preserve addition/);
+	});
+
+	it("authors directions and self-check questions in the same section edit", async () => {
+		const { store, get } = fakeStore(record());
+		const tools = toolsOf(store);
+		const created = await tools[EDIT_DOCUMENT_TOOL]!.execute("call_1", {
+			title: "Linear algebra",
+			sections: [{
+				id: "maps",
+				heading: "Linear maps",
+				body: "A map preserves structure.",
+				suggestions: [{ id: "eigen", heading: "Eigenvectors", blurb: "Fixed directions." }],
+				questions: [{ id: "q1", question: "What is preserved?", answer: "Addition and scaling." }],
+			}],
+		} as never);
+		assert.equal((created.details as { ok?: boolean }).ok, true);
+		const section = get().document?.sections[0];
+		assert.equal(section?.suggestions?.[0]?.id, "eigen");
+		assert.equal(section?.questions?.[0]?.answer, "Addition and scaling.");
 	});
 
 	it("suggests deeper directions for one chapter and lists the tree", async () => {

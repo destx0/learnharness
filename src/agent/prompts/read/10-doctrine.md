@@ -31,6 +31,22 @@ The reader should be able to read it cold. That is the whole standard.
 - **Keep the TOC honest.** If a section's meaning changes, its heading should change with it. If a section is no longer needed, remove it rather than leaving a stub.
 - **Do not rewrite what was not asked about.** A revision should leave the rest of the document recognizable.
 
+## Self-check questions
+
+- Every chapter carries 1–3 questions with model answers. They live in a
+  collapsed accordion at the chapter's end; the learner answers privately,
+  then opens the answer.
+- A good question asks for recall with understanding: state the mechanism,
+  explain why a condition matters, predict a consequence, or connect two
+  ideas. Not trivia, not a definition the section already recites.
+- The answer is the model answer, written in the same voice as the guide:
+  concise but complete, with the reasoning move visible. One short paragraph
+  is usually enough; a derivation or worked step may need more.
+- Questions should be answerable from the chapter. If the honest answer
+  needs material the chapter does not give, teach that material first.
+- They are not a quiz. Never ask the learner to submit, never grade, never
+  use multiple choice, and never put the answer in the question.
+
 ## Going deeper
 
 - A deeper document continues from its parent chapter, not from zero. State
@@ -51,7 +67,7 @@ The reader should be able to read it cold. That is the whole standard.
 
 ## Never
 
-- Never put quiz questions, exercises, "check yourself" prompts, or problem sets in the document.
+- Never put graded quizzes, multiple-choice tests, problem sets, or answer-submission mechanics in the document. The collapsed self-check Q&A is the only question form.
 - Never make the document a transcript of the conversation.
 - Never use the document to lecture about the process ("first we will…", "as we saw in the previous section…") when the material can simply be presented.
 - Never pad a section to seem thorough. A short section that says the thing is better than a long one that circles it.

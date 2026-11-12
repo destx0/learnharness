@@ -25,7 +25,7 @@ The mode exists because teach opens by probing (the learner answers questions be
 - **Agent-only edits**: the learner never edits the pane directly.
 - **Starts with a summary of the topic's main ideas**, sized by the agent to the subject (no fixed word count); real explanation, not an outline.
 - **Never asks a clarifying question before writing**: choose the standard reading and state the assumption in the document.
-- **No quiz**, ever.
+- **No graded quiz**, ever. The document may carry optional self-check questions with hidden model answers; the learner reveals them privately, never submits an answer.
 - **No knowledge-graph extraction** (a later explicit "save to graph" action is a possible follow-up).
 - **Tools**: research, files/PDFs, and mermaid diagrams. No quiz/ask/plan/probe/problem/demo/visual tools.
 - **Name**: Read. Session kind `read`.
@@ -36,8 +36,9 @@ The mode exists because teach opens by probing (the learner answers questions be
 
 ```ts
 interface StudyTopicSuggestion { id: string; heading: string; blurb: string; documentId?: string; sectionId?: string }
+interface StudySectionQuestion { id: string; question: string; answer: string }
 interface StudyRelatedLink { documentId: string; sectionId?: string; reason: string }
-interface StudySection { id: string; heading: string; body: string; suggestions?: StudyTopicSuggestion[] }
+interface StudySection { id: string; heading: string; body: string; suggestions?: StudyTopicSuggestion[]; questions?: StudySectionQuestion[] }
 interface StudyDocument {
   id: string;                    // "root" | "doc_…"
   title: string;
@@ -67,15 +68,17 @@ The pane derives its chapter list from the sections and its tree from the parent
 
 ### Document tools
 
-- **`edit_document`** — server-executed. Upserts sections by id, removes by id, reorders with `order`, renames with `title`. The first call must set the title. Validation failures return `ok:false` with the problems (the `plan_init` retry pattern). Writes `ChatRecord.document` through `ChatStore.saveDocument` and emits `document-changed`.
-- **`read_document`** — returns the current document (or one section). Needed after compaction or before a large rewrite; the full document is deliberately not echoed through every edit result.
+- **`edit_document`** — server-executed. Upserts sections by id, removes by id, reorders with `order`, renames with `title`, replaces cross-links with `related`, and (on a section patch) carries `suggestions` (2–4 deeper directions) and `questions` (1–3 self-check Q&A pairs). The first call must set the title. Validation failures return `ok:false` with the problems (the `plan_init` retry pattern). Writes the target document through `ChatStore.saveDocument` and emits `document-changed`.
+- **`read_document`** — returns one document (or one section), targeted by id.
+- **`suggest_deeper`** — regenerates one chapter's directions (the refresh path).
+- **`list_documents`** — the whole tree with ids, chapter ids, suggestions, and related links.
 
-The pure patch engine is `src/core/study-document.ts`: `applyStudyDocumentEdit`, `StudyDocumentError`, TOC/markdown/outline/word-count projections. All shape judgments live there, not in the store.
+The pure patch engine is `src/core/study-document.ts`: `applyStudyDocumentEdit`, `applyStudySuggestions`, `StudyDocumentError`, TOC/markdown/outline/word-count projections. All shape judgments live there, not in the store.
 
 ## Live updates
 
-- `edit_document` saves the record and emits `document-changed` (`{chatId}` — tiny payload, notify-then-fetch).
-- `GET /api/chats/[id]/document` returns `{document}`. The pane refetches on the event.
+- `edit_document` / `suggest_deeper` save the record and emit `document-changed` (`{chatId, documentId?}` — tiny payload, notify-then-fetch).
+- `GET /api/chats/[id]/document` returns `{document, documents, readingDocumentId}`. The pane refetches on the event.
 - The pane also refetches on `turn-settled` (belt and suspenders) and on SSE reconnect.
 - A mid-turn document write updates the pane without touching the client's streaming message state — that is why the event is separate from `record-changed` (which the chat view ignores while a turn runs).
 - The transcript gets a quiet `Document updated · …` line from the document card; the document body never duplicates into chat.
@@ -138,9 +141,13 @@ hidden contents drawer plus an optional topic graph.
 
 - **Drill into a child document**, not inline expansion and not a new read
   session. Same session, same shared chat.
-- **Suggestions are generated on click**, not authored with every chapter.
-  "Go deeper" is the affordance; the agent proposes 2–4 directions, the
-  learner picks, then the child is written.
+- **Directions ship with the chapter**, authored in the same
+  `edit_document` patch: every new or substantially revised section carries
+  2–4 deeper directions, so the learner sees them immediately. The
+  "Go deeper" click is the regeneration/repair path, not the first reveal.
+- **Self-check questions ship with the chapter too**, hidden in a collapsed
+  accordion: 1–3 questions with model answers. The learner answers privately
+  and then opens the answer. This is not a graded quiz or a question tool.
 - **Switch immediately**: the pending child opens with a writing state and
   sections stream in as `edit_document` calls land.
 - **Chat steers the open document.** Switching documents switches the
@@ -165,20 +172,23 @@ readingDocumentId?: string;       // chat steering target (view state)
 `StudyDocument` adds `id` (`"root"` or `doc_…`), `parent` (the chapter and
 suggestion that spawned it), `related`, and `status` (`writing | ready |
 failed`; absent reads ready). `StudySection` adds `suggestions` (stable
-slug, heading, blurb, optional existing `documentId`/`sectionId`).
+slug, heading, blurb, optional existing `documentId`/`sectionId`) and
+`questions` (stable slug, question, answer).
 
 `StudyRelatedLink` is document-level: `{documentId, sectionId?, reason}`.
 The graph draws it dashed; the reading footer lists it.
 
 Bounds: 50 documents per session, six levels below the root, six suggestions
-per chapter. Section/body/total limits stay as before per document.
+and six questions per chapter. Section/body/total limits stay as before per
+document.
 
 ### The turns
 
 The learner's clicks are hidden session markers, not chat bubbles:
 
-- `suggest-deeper` → `read-suggest` marker. The agent reads the chapter and
-  calls `suggest_deeper`; the pane renders the chips.
+- `suggest-deeper` → `read-suggest` marker. This is the regeneration path
+  (refresh, or a chapter authored before directions existed). The agent
+  reads the chapter and calls `suggest_deeper`; the pane renders the chips.
 - `go-deeper` → the server pre-creates the child (`status:"writing"`), makes
   it the active document, then appends a `read-deeper` marker and starts the
   writer turn. The agent writes with `edit_document` and the child's id.
@@ -221,10 +231,14 @@ listeners); the pane refetches all documents on a short debounce.
   child under the chapter. Writing/failed status dots; clicking a chapter
   opens its document at that section. Breadcrumb and back button for the
   document chain.
-- Inline "Go deeper" at the end of every chapter: a quiet button when no
-  suggestions exist, a spinner while the agent thinks, then 2–4 cards with
-  title/blurb and an Open/Write/Retry/Writing state. A refresh control
-  regenerates directions.
+- Inline "Go deeper" at the end of every chapter: the authored 2–4 cards
+  with title/blurb and an Open/Write/Retry/Writing state. A refresh control
+  regenerates directions; a chapter with none still offers a quiet
+  "Suggest deeper topics" button.
+- Self-check questions render above the deeper block as a native `<details>`
+  accordion, collapsed by default. Opening it lists each question; opening a
+  question reveals its model answer. A chapter without questions renders
+  nothing.
 - Related links render as a footer list with a remove affordance.
 - The graph toggle opens a dagre-laid-out SVG (documents left, chapters
   right, deeper branches further right; dashed related curves). Chapter
@@ -235,8 +249,8 @@ listeners); the pane refetches all documents on a short debounce.
 
 ### Tests
 
-- `tests/study-document.test.ts` — suggestions, child creation, depth,
-  breadcrumb, related links, tree text.
+- `tests/study-document.test.ts` — authored suggestions/questions, child
+  creation, depth, breadcrumb, related links, tree text.
 - `tests/read-agent.test.ts` — tool registry, targeted child edits,
   `suggest_deeper`, `list_documents`, prompt paths.
 - `tests/read-deeper-input.test.ts` — parse + hidden markers + active-document
@@ -245,7 +259,7 @@ listeners); the pane refetches all documents on a short debounce.
   target validation.
 - `tests/read-graph.test.ts` — graph projection and deterministic layout.
 - `tests/render-read-pane.test.tsx` — drawer, breadcrumb, suggestions,
-  related links, graph toggle, failed/empty states.
+  self-check accordion, related links, graph toggle, failed/empty states.
 - `tests/chat-kind.test.ts` — child upsert + list payload exclusion.
 
 Status: implemented 2026-11-12.

@@ -17,6 +17,8 @@ import {
 	studyDocumentTreeText,
 	STUDY_BODY_MAX,
 	STUDY_HEADING_MAX,
+	STUDY_QUESTIONS_MAX,
+	STUDY_QUESTION_MAX,
 	STUDY_RELATED_MAX,
 	STUDY_RELATED_REASON_MAX,
 	STUDY_ROOT_DOCUMENT_ID,
@@ -25,6 +27,7 @@ import {
 	STUDY_SUGGESTION_HEADING_MAX,
 	STUDY_SUGGESTIONS_MAX,
 	STUDY_TITLE_MAX,
+	STUDY_ANSWER_MAX,
 } from "../../core/study-document.ts";
 import { emit } from "../../core/events.ts";
 
@@ -56,6 +59,47 @@ export interface DocumentToolContext {
 	chatStore: ChatStore;
 }
 
+const topicSuggestion = Type.Object({
+	id: Type.String({
+		maxLength: 64,
+		description: "Stable lowercase slug, unique within this chapter.",
+	}),
+	heading: Type.String({
+		maxLength: STUDY_SUGGESTION_HEADING_MAX,
+		description: "Short topic title — a direction the learner can choose.",
+	}),
+	blurb: Type.String({
+		maxLength: STUDY_SUGGESTION_BLURB_MAX,
+		description: "One line: what going deeper would cover and why it follows from this chapter.",
+	}),
+	documentId: Type.Optional(
+		Type.String({
+			description:
+				"An already-written document this direction points to. Omit to make the direction generate a new child document.",
+		}),
+	),
+	sectionId: Type.Optional(
+		Type.String({
+			description: "A chapter inside documentId; omit for the document top.",
+		}),
+	),
+});
+
+const questionPatch = Type.Object({
+	id: Type.String({
+		maxLength: 64,
+		description: "Stable lowercase slug, unique within this chapter's questions.",
+	}),
+	question: Type.String({
+		maxLength: STUDY_QUESTION_MAX,
+		description: "One self-check question the learner can try to answer before revealing the answer.",
+	}),
+	answer: Type.String({
+		maxLength: STUDY_ANSWER_MAX,
+		description: "The model answer — concise but complete, in the reader's terms.",
+	}),
+});
+
 const sectionPatch = Type.Object({
 	id: Type.String({
 		description:
@@ -72,6 +116,20 @@ const sectionPatch = Type.Object({
 			maxLength: STUDY_BODY_MAX,
 			description:
 				"Markdown body (LaTeX and mermaid render). Required for a new section; omit to keep an existing body. Do not repeat the section heading inside it.",
+		}),
+	),
+	suggestions: Type.Optional(
+		Type.Array(topicSuggestion, {
+			maxItems: STUDY_SUGGESTIONS_MAX,
+			description:
+				"This chapter's 2–4 deeper directions, shown immediately in the reading pane. Include them whenever you write or substantially revise the section; omit on small edits to keep the existing directions. An empty array clears them.",
+		}),
+	),
+	questions: Type.Optional(
+		Type.Array(questionPatch, {
+			maxItems: STUDY_QUESTIONS_MAX,
+			description:
+				"This chapter's 1–3 self-check questions and answers, hidden in a collapsed accordion. Include them whenever you write or substantially revise the section; omit on small edits. An empty array clears them.",
 		}),
 	),
 });
@@ -146,32 +204,6 @@ export const readDocumentInput = Type.Object({
 	),
 });
 
-const suggestionInput = Type.Object({
-	id: Type.String({
-		maxLength: 64,
-		description: "Stable lowercase slug, unique within this chapter.",
-	}),
-	heading: Type.String({
-		maxLength: STUDY_SUGGESTION_HEADING_MAX,
-		description: "Short topic title — a direction the learner can choose.",
-	}),
-	blurb: Type.String({
-		maxLength: STUDY_SUGGESTION_BLURB_MAX,
-		description: "One line: what going deeper would cover and why it follows from this chapter.",
-	}),
-	documentId: Type.Optional(
-		Type.String({
-			description:
-				"An already-written document this direction points to. Omit to make the direction generate a new child document.",
-		}),
-	),
-	sectionId: Type.Optional(
-		Type.String({
-			description: "A chapter inside documentId; omit for the document top.",
-		}),
-	),
-});
-
 export const suggestDeeperInput = Type.Object({
 	documentId: Type.Optional(
 		Type.String({
@@ -181,7 +213,7 @@ export const suggestDeeperInput = Type.Object({
 	sectionId: Type.String({
 		description: "The chapter id the learner pressed 'Go deeper' on.",
 	}),
-	suggestions: Type.Array(suggestionInput, {
+	suggestions: Type.Array(topicSuggestion, {
 		minItems: 1,
 		maxItems: STUDY_SUGGESTIONS_MAX,
 		description:
@@ -255,7 +287,7 @@ export function editDocumentTool(ctx: DocumentToolContext): AgentTool<typeof edi
 		name: EDIT_DOCUMENT_TOOL,
 		label: EDIT_DOCUMENT_TOOL,
 		description:
-			"Create or update one study document shown in the learner's reading pane. Omit documentId to edit the document the learner is reading (the root when none); pass documentId to edit a deeper document. Use `sections` to upsert by id (new sections need an id, heading, and body), `remove` to delete ids, `order` to set the full section order, `title` to name the document, and `related` to link related documents. " +
+			"Create or update one study document shown in the learner's reading pane. Omit documentId to edit the document the learner is reading (the root when none); pass documentId to edit a deeper document. Use `sections` to upsert by id (new sections need an id, heading, and body), `remove` to delete ids, `order` to set the full section order, `title` to name the document, and `related` to link related documents. Each section patch should also carry its 2–4 `suggestions` (deeper directions) and 1–3 `questions` (self-check question/answer pairs) whenever you write or substantially revise that section — the learner sees the directions immediately and the questions in a collapsed accordion. " +
 			"The first root edit must set the title. Section ids are permanent: choose a lowercase slug once and reuse it for revisions. Only change what the learner asked for; keep the rest of the document stable. " +
 			"The result returns the target's current table of contents. Use read_document before a large rewrite or whenever the current text is not in your context, and list_documents to see the whole tree.",
 		parameters: editDocumentInput,

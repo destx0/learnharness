@@ -290,3 +290,74 @@ describe("deeper-document tree", () => {
 		assert.equal(removeStudyRelatedLink(removed, "doc_eigen", "idea"), removed);
 	});
 });
+
+
+describe("authoring directions and self-check questions with a section", () => {
+	it("stores suggestions and questions on a new section", () => {
+		const doc = applyStudyDocumentEdit(undefined, {
+			title: "Linear algebra",
+			sections: [{
+				id: "maps",
+				heading: "Linear maps",
+				body: "A map preserves structure.",
+				suggestions: [{ id: "eigen", heading: "Eigenvectors", blurb: "Fixed directions." }],
+				questions: [
+					{ id: "q1", question: "What is preserved by a linear map?", answer: "Addition and scaling." },
+					{ id: "q2", question: "Why is the zero vector special?", answer: "Every linear map sends it to zero." },
+				],
+			}],
+		}, NOW);
+		const section = doc.sections[0]!;
+		assert.equal(section.suggestions?.[0]?.id, "eigen");
+		assert.deepEqual(section.questions?.map((q) => q.id), ["q1", "q2"]);
+	});
+
+	it("replaces only what the patch names, and clears with an empty list", () => {
+		const doc = applyStudyDocumentEdit(undefined, {
+			title: "Linear algebra",
+			sections: [{
+				id: "maps",
+				heading: "Linear maps",
+				body: "A map preserves structure.",
+				suggestions: [{ id: "eigen", heading: "Eigenvectors", blurb: "Fixed directions." }],
+				questions: [{ id: "q1", question: "What is preserved?", answer: "Addition and scaling." }],
+			}],
+		}, NOW);
+		const questionsOnly = applyStudyDocumentEdit(doc, {
+			sections: [{
+				id: "maps",
+				questions: [{ id: "q2", question: "What is the kernel?", answer: "The vectors sent to zero." }],
+			}],
+		}, NOW);
+		assert.equal(questionsOnly.sections[0]?.body, "A map preserves structure.");
+		assert.equal(questionsOnly.sections[0]?.suggestions?.[0]?.id, "eigen");
+		assert.deepEqual(questionsOnly.sections[0]?.questions?.map((q) => q.id), ["q2"]);
+		const cleared = applyStudyDocumentEdit(questionsOnly, {
+			sections: [{ id: "maps", questions: [], suggestions: [] }],
+		}, NOW);
+		assert.equal(cleared.sections[0]?.questions, undefined);
+		assert.equal(cleared.sections[0]?.suggestions, undefined);
+	});
+
+	it("rejects duplicate or empty questions without writing", () => {
+		const doc = firstDoc();
+		assert.throws(
+			() => applyStudyDocumentEdit(doc, {
+				sections: [{
+					id: "maps",
+					questions: [
+						{ id: "q", question: "One?", answer: "One." },
+						{ id: "q", question: "Two?", answer: "Two." },
+					],
+				}],
+			}, NOW),
+			(err) => err instanceof StudyDocumentError && /appears more than once/.test(err.message),
+		);
+		assert.throws(
+			() => applyStudyDocumentEdit(doc, {
+				sections: [{ id: "maps", questions: [{ id: "q", question: "", answer: "A." }] }],
+			}, NOW),
+			(err) => err instanceof StudyDocumentError && /question must not be empty/.test(err.message),
+		);
+	});
+});

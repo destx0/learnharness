@@ -8,6 +8,7 @@ import {
 	ChevronDownIcon,
 	ChevronRightIcon,
 	HashIcon,
+	HelpCircleIcon,
 	PanelLeftIcon,
 	PlusIcon,
 	RefreshCwIcon,
@@ -29,6 +30,7 @@ import {
 	studyDocumentWordCount,
 	STUDY_ROOT_DOCUMENT_ID,
 	type StudyDocument,
+	type StudySectionQuestion,
 	type StudyTopicSuggestion,
 } from "@/src/core";
 import { cn } from "@/lib/utils";
@@ -886,6 +888,7 @@ function ReadArticle({
 								<MessageResponse>{section.body}</MessageResponse>
 							</SessionMermaidContext.Provider>
 						</div>
+						<SelfCheck questions={section.questions ?? []} />
 						<SectionDirections
 							document={document}
 							sectionId={section.id}
@@ -935,6 +938,39 @@ function ReadArticle({
 				)}
 			</article>
 		</div>
+	);
+}
+
+function SelfCheck({ questions }: { questions: readonly StudySectionQuestion[] }) {
+	if (questions.length === 0) return null;
+	return (
+		// Native details: collapsed by default, keyboard-accessible, no state.
+		<details className="group mt-6 rounded-md border border-border/60" data-testid="read-section-questions">
+			<summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 font-ui text-[10px] font-medium uppercase tracking-widest text-muted-foreground/80 [&::-webkit-details-marker]:hidden">
+				<HelpCircleIcon className="size-3.5 shrink-0" aria-hidden="true" />
+				Check yourself
+				<span className="font-normal normal-case tracking-normal text-muted-foreground/60">
+					{questions.length} {questions.length === 1 ? "question" : "questions"}
+				</span>
+				<ChevronDownIcon className="ml-auto size-3.5 shrink-0 text-muted-foreground/60 transition-transform group-open:rotate-180" aria-hidden="true" />
+			</summary>
+			<div className="space-y-2 border-t border-border/50 p-3">
+				{questions.map((entry, index) => (
+					<details key={entry.id} className="group/q rounded-md border border-border/50 bg-background/60">
+						<summary className="flex cursor-pointer list-none items-start gap-2 px-3 py-2 text-sm leading-relaxed [&::-webkit-details-marker]:hidden">
+							<span className="font-ui text-[10px] text-muted-foreground/60" aria-hidden="true">{index + 1}.</span>
+							<span className="min-w-0 flex-1">{entry.question}</span>
+							<ChevronDownIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/60 transition-transform group-open/q:rotate-180" aria-hidden="true" />
+						</summary>
+						<div className="lh-prose border-t border-border/50 px-3 py-2 text-sm">
+							<SessionMermaidContext.Provider value={null}>
+								<MessageResponse>{entry.answer}</MessageResponse>
+							</SessionMermaidContext.Provider>
+						</div>
+					</details>
+				))}
+			</div>
+		</details>
 	);
 }
 

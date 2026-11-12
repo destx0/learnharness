@@ -20,6 +20,7 @@
 - [StudyDocumentStatus](#studydocumentstatus) — supporting declaration
 - [StudyRelatedLink](#studyrelatedlink) — supporting declaration
 - [StudySection](#studysection) — supporting declaration
+- [StudySectionQuestion](#studysectionquestion) — supporting declaration
 - [StudyTopicSuggestion](#studytopicsuggestion) — supporting declaration
 - [TurnUsage](#turnusage) — supporting declaration
 
@@ -1101,10 +1102,11 @@ export interface StudySection {
     heading: string;
     body: string;
     suggestions?: StudyTopicSuggestion[];
+    questions?: StudySectionQuestion[];
 }
 ```
 
-**Related types:** [StudyTopicSuggestion](contracts-chat.md#studytopicsuggestion).
+**Related types:** [StudySectionQuestion](contracts-chat.md#studysectionquestion), [StudyTopicSuggestion](contracts-chat.md#studytopicsuggestion).
 
 **Member index** (including nested object members; inherited members are defined in the linked base types):
 
@@ -1112,6 +1114,7 @@ export interface StudySection {
 - [heading](#studysection-heading)
 - [body](#studysection-body)
 - [suggestions](#studysection-suggestions)
+- [questions](#studysection-questions)
 
 ### StudySection id
 
@@ -1135,10 +1138,60 @@ body: string;
 
 ### StudySection suggestions
 
-Deeper directions for this chapter, generated on demand.
+Deeper directions for this chapter, authored with the chapter.
 
 ```ts
 suggestions?: StudyTopicSuggestion[];
+```
+
+### StudySection questions
+
+Suggested self-check questions and their model answers.
+
+```ts
+questions?: StudySectionQuestion[];
+```
+
+## StudySectionQuestion
+
+Supporting declaration used by a public type. This is not an additional runtime API or SDK helper.
+
+One suggested self-check question for a chapter. The learner answers it
+themselves and then reveals the stored model answer; the pane keeps the
+whole set collapsed by default. Not a graded quiz.
+
+```ts
+export interface StudySectionQuestion {
+    id: string;
+    question: string;
+    answer: string;
+}
+```
+
+**Member index** (including nested object members; inherited members are defined in the linked base types):
+
+- [id](#studysectionquestion-id)
+- [question](#studysectionquestion-question)
+- [answer](#studysectionquestion-answer)
+
+### StudySectionQuestion id
+
+Stable lowercase slug, unique within the section.
+
+```ts
+id: string;
+```
+
+### StudySectionQuestion question
+
+```ts
+question: string;
+```
+
+### StudySectionQuestion answer
+
+```ts
+answer: string;
 ```
 
 ## StudyTopicSuggestion

@@ -26,6 +26,9 @@ const ROOT: StudyDocument = {
 			suggestions: [
 				{ id: "why", heading: "Why vectors?", blurb: "The geometry behind the abstraction." },
 			],
+			questions: [
+				{ id: "q1", question: "What makes a space a vector space?", answer: "It is closed under addition and scaling." },
+			],
 		},
 		{ id: "maps", heading: "Linear maps", body: "A map preserves addition and scaling." },
 	],
@@ -72,6 +75,10 @@ describe("ReadDocumentView — the reading surface", () => {
 		assert.ok(html.includes("Suggest deeper topics"));
 		assert.ok(html.includes(">Why vectors?<"));
 		assert.ok(html.includes("Go deeper"));
+		assert.ok(html.includes('data-testid="read-section-questions"'));
+		assert.ok(html.includes("Check yourself"));
+		assert.ok(html.includes("What makes a space a vector space?"));
+		assert.ok(html.includes("It is closed under addition and scaling."));
 		// The document is the main view: no close affordance unless the host
 		// explicitly asks for one.
 		assert.equal(html.includes('data-testid="read-pane-close"'), false);

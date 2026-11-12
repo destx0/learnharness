@@ -45,6 +45,16 @@ export interface StudyTopicSuggestion {
 	sectionId?: string;
 }
 
+/** One suggested self-check question for a chapter. The learner answers it
+ *  themselves and then reveals the stored model answer; the pane keeps the
+ *  whole set collapsed by default. Not a graded quiz. */
+export interface StudySectionQuestion {
+	/** Stable lowercase slug, unique within the section. */
+	id: string;
+	question: string;
+	answer: string;
+}
+
 /** A cross-link from a document to a related document/chapter. Agent-
  *  authored when it writes a child; drawn dashed in the graph and listed
  *  in the reading footer. */
@@ -65,8 +75,10 @@ export interface StudySection {
 	id: string;
 	heading: string;
 	body: string;
-	/** Deeper directions for this chapter, generated on demand. */
+	/** Deeper directions for this chapter, authored with the chapter. */
 	suggestions?: StudyTopicSuggestion[];
+	/** Suggested self-check questions and their model answers. */
+	questions?: StudySectionQuestion[];
 }
 
 export interface StudyDocument {

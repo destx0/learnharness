@@ -109,6 +109,10 @@ function useRoadmapLauncher(onNavigating?: () => void) {
 	return { launch, starting, error };
 }
 
+function typeLabel(item: RoadmapQuickItem): string {
+	return item.type === "role" ? "Role roadmap" : item.type === "best-practice" ? "Best practice" : "Skill roadmap";
+}
+
 function RoadmapCard({
 	item,
 	starting,
@@ -138,7 +142,7 @@ function RoadmapCard({
 				</span>
 				{item.preset && <WaypointsIcon className="size-3 shrink-0 text-muted-foreground/70" aria-label="Graph preset" />}
 			</span>
-			<span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{item.category}</span>
+			<span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{typeLabel(item)}</span>
 			<span className="mt-auto block font-ui text-[9px] uppercase tracking-widest text-muted-foreground/60">
 				{starting ? "Starting…" : open ? "Open" : "Start"}
 			</span>

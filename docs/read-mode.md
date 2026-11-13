@@ -170,6 +170,7 @@ hidden contents drawer plus an optional topic graph.
 ```ts
 documents?: StudyDocument[];      // children, tree derived from parent links
 readingDocumentId?: string;       // chat steering target (view state)
+roadmapSlug?: string;             // quick-start identity (imported preset)
 ```
 
 `StudyDocument` adds `id` (`"root"` or `doc_…`), `parent` (the chapter and

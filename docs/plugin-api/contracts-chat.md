@@ -20,6 +20,8 @@
 - [StudyDocumentStatus](#studydocumentstatus) — supporting declaration
 - [StudyRelatedLink](#studyrelatedlink) — supporting declaration
 - [StudyRoadmapRef](#studyroadmapref) — supporting declaration
+- [StudyRoadmapTrack](#studyroadmaptrack) — supporting declaration
+- [StudyRoadmapView](#studyroadmapview) — supporting declaration
 - [StudySection](#studysection) — supporting declaration
 - [StudySectionQuestion](#studysectionquestion) — supporting declaration
 - [StudyTopicSuggestion](#studytopicsuggestion) — supporting declaration
@@ -936,11 +938,12 @@ export interface StudyDocument {
         topicId: string;
     };
     related?: StudyRelatedLink[];
+    roadmap?: StudyRoadmapView;
     status?: StudyDocumentStatus;
 }
 ```
 
-**Related types:** [StudyDocumentStatus](contracts-chat.md#studydocumentstatus), [StudyRelatedLink](contracts-chat.md#studyrelatedlink), [StudySection](contracts-chat.md#studysection).
+**Related types:** [StudyDocumentStatus](contracts-chat.md#studydocumentstatus), [StudyRelatedLink](contracts-chat.md#studyrelatedlink), [StudyRoadmapView](contracts-chat.md#studyroadmapview), [StudySection](contracts-chat.md#studysection).
 
 **Member index** (including nested object members; inherited members are defined in the linked base types):
 
@@ -954,6 +957,7 @@ export interface StudyDocument {
 - [parent.sectionId](#studydocument-parentsectionid)
 - [parent.topicId](#studydocument-parenttopicid)
 - [related](#studydocument-related)
+- [roadmap](#studydocument-roadmap)
 - [status](#studydocument-status)
 
 ### StudyDocument id
@@ -1031,6 +1035,14 @@ Cross-links to related documents/chapters.
 related?: StudyRelatedLink[];
 ```
 
+### StudyDocument roadmap
+
+Imported-roadmap grouping (root seed only).
+
+```ts
+roadmap?: StudyRoadmapView;
+```
+
 ### StudyDocument status
 
 Generation state; absent reads as ready.
@@ -1106,7 +1118,7 @@ the roadmap; agent-authored suggestions leave it absent.
 export interface StudyRoadmapRef {
     slug: string;
     nodeId: string;
-    kind: "track" | "topic";
+    kind: "track" | "topic" | "subtopic";
 }
 ```
 
@@ -1131,7 +1143,92 @@ nodeId: string;
 ### StudyRoadmapRef kind
 
 ```ts
-kind: "track" | "topic";
+kind: "track" | "topic" | "subtopic";
+```
+
+## StudyRoadmapTrack
+
+Supporting declaration used by a public type. This is not an additional runtime API or SDK helper.
+
+The roadmap grouping attached to a seeded root document. Labels and
+hierarchy only — the guide prose is agent-written.
+
+```ts
+export interface StudyRoadmapTrack {
+    id: string;
+    title: string;
+    topicIds: string[];
+}
+```
+
+**Member index** (including nested object members; inherited members are defined in the linked base types):
+
+- [id](#studyroadmaptrack-id)
+- [title](#studyroadmaptrack-title)
+- [topicIds](#studyroadmaptrack-topicids)
+
+### StudyRoadmapTrack id
+
+```ts
+id: string;
+```
+
+### StudyRoadmapTrack title
+
+```ts
+title: string;
+```
+
+### StudyRoadmapTrack topicIds
+
+```ts
+topicIds: string[];
+```
+
+## StudyRoadmapView
+
+Supporting declaration used by a public type. This is not an additional runtime API or SDK helper.
+
+```ts
+export interface StudyRoadmapView {
+    slug: string;
+    title: string;
+    source: string;
+    tracks: StudyRoadmapTrack[];
+}
+```
+
+**Related types:** [StudyRoadmapTrack](contracts-chat.md#studyroadmaptrack).
+
+**Member index** (including nested object members; inherited members are defined in the linked base types):
+
+- [slug](#studyroadmapview-slug)
+- [title](#studyroadmapview-title)
+- [source](#studyroadmapview-source)
+- [tracks](#studyroadmapview-tracks)
+
+### StudyRoadmapView slug
+
+```ts
+slug: string;
+```
+
+### StudyRoadmapView title
+
+```ts
+title: string;
+```
+
+### StudyRoadmapView source
+
+```ts
+source: string;
+```
+
+### StudyRoadmapView tracks
+
+```ts
+tracks: StudyRoadmapTrack[];
 ```
 
 ## StudySection

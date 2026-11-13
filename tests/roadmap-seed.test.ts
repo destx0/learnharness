@@ -46,13 +46,14 @@ describe("roadmap presets", () => {
 		assert.equal(roadmapForTitle("Rust"), null);
 	});
 
-	it("seeds a read session's root with track suggestions", () => {
+	it("seeds a read session's root with every main topic", () => {
 		const chat = chatStore.createChat("Angular", "read");
 		assert.equal(seedRoadmapForChat(chatStore, chat.id, chat.title), true);
 		const record = chatStore.getChat(chat.id);
 		assert.equal(record?.document?.title, "Angular");
-		assert.equal(record?.document?.sections[0]?.suggestions?.length, 1);
-		assert.equal(record?.document?.sections[0]?.suggestions?.[0]?.roadmap?.nodeId, "track:foundations");
+		assert.deepEqual(record?.document?.sections.map((section) => section.id), ["overview", "introduction", "components"]);
+		assert.equal(record?.document?.sections[1]?.suggestions?.[0]?.roadmap?.nodeId, "subtopic:introduction:architecture");
+		assert.equal(record?.document?.roadmap?.tracks[0]?.title, "Foundations");
 		assert.equal(record?.readingDocumentId, "root");
 		// Never overwrite an existing document; never seed a teach session.
 		assert.equal(seedRoadmapForChat(chatStore, chat.id, "Angular"), false);
@@ -70,10 +71,10 @@ describe("roadmap presets", () => {
 		const record = chatStore.getChat(body.id);
 		assert.equal(record?.kind, "read");
 		assert.equal(record?.document?.title, "Angular");
-		assert.equal(record?.document?.sections[0]?.suggestions?.[0]?.roadmap?.nodeId, "track:foundations");
+		assert.equal(record?.document?.sections[1]?.suggestions?.[0]?.roadmap?.nodeId, "subtopic:introduction:architecture");
 	});
 
-	it("seeds a track child with its topics and a topic child with roadmap context", () => {
+	it("seeds legacy track/topic children and a subtopic deep dive", () => {
 		const roadmap = readRoadmap("angular")!;
 		const base = {
 			id: "doc_track",
@@ -92,6 +93,11 @@ describe("roadmap presets", () => {
 		const topic = roadmapChildSeed(roadmap, "topic:components", { ...base, id: "doc_topic", parent: { documentId: "doc_track", sectionId: "overview", topicId: "components" } });
 		assert.equal(topic.document.sections.length, 0);
 		assert.match(topic.context, /Subtopics in roadmap order: Selector; Template/);
+
+		const subtopic = roadmapChildSeed(roadmap, "subtopic:components:selector", { ...base, id: "doc_selector", parent: { documentId: "root", sectionId: "components", topicId: "selector" } });
+		assert.equal(subtopic.document.title, "Selector");
+		assert.equal(subtopic.document.sections.length, 0);
+		assert.match(subtopic.context, /Roadmap subtopic: Selector \(topic: Components/);
 	});
 
 	it("the generated child is discoverable by its parent topic", () => {

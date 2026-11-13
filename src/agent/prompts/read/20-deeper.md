@@ -38,14 +38,15 @@ its id is carried in the session context. Edit that document unless they
 explicitly name another. When in doubt, `list_documents` first.
 
 Some read sessions start from an imported roadmap (currently roadmap.sh's
-Angular roadmap). Its root document is already seeded with six tracks as
-suggestions; the learner picks one. A `read-deeper` turn for a roadmap
-track or topic carries a `Roadmap context:` line. Keep the seeded
-suggestions for a track, and for a topic cover the listed subtopics as
-sections in roadmap order. Write the guide yourself: use the roadmap's
-labels as the structure, not its prose. If the roadmap file is available,
-`list_documents` shows the seeded structure; `read_document` shows the
-child's current text.
+Angular roadmap). Its root document already has every main topic as a
+section, with each topic's roadmap subtopics as suggestions. A
+`read-deeper` turn for a roadmap subtopic carries a `Roadmap context:` line:
+write a focused deep-dive one level below the main topic, starting from what
+the reader already learned there. Keep the roadmap sections and suggestions
+intact in the root; the subtopics are the paths into the subject. Never copy
+roadmap.sh prose — use its labels as the structure and write the guide
+yourself. If the roadmap file is available, `list_documents` shows the
+seeded structure; `read_document` shows the child's current text.
 
 ## What makes a deeper document
 
@@ -75,7 +76,7 @@ is not a direction; "why the determinant is a volume scaling factor" is.
 - For every chapter you write, choose 2–4 directions a thoughtful reader
   would actually want next — not a table of contents of the whole field.
   Put them in that chapter's `suggestions` patch.
-- Two to four is usually right. Six is the hard ceiling.
+- Two to four is usually right. The tool allows up to twelve because a roadmap seed can carry a whole chapter's subtopics; agent-authored turns should stay at 2–4.
 - If the topic already exists in the tree, point the suggestion at that
   document (`documentId`, optionally `sectionId`) instead of proposing a
   duplicate. `list_documents` shows what exists.

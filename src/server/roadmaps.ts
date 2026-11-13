@@ -94,19 +94,6 @@ function topicBlurb(topic: RoadmapTopic): string {
 	return truncate(`Roadmap subtopics: ${topic.subtopics.map((sub) => sub.title).join(" · ")}`, 240);
 }
 
-function trackBlurb(track: RoadmapTrack): string {
-	return truncate(`Roadmap topics: ${track.topics.map((topic) => topic.title).join(" · ")}`, 240);
-}
-
-function trackSuggestion(roadmap: RoadmapDataset, track: RoadmapTrack): StudyTopicSuggestion {
-	return {
-		id: track.id,
-		heading: track.title,
-		blurb: trackBlurb(track),
-		roadmap: { slug: roadmap.slug, nodeId: `track:${track.id}`, kind: "track" },
-	};
-}
-
 function topicSuggestion(roadmap: RoadmapDataset, topic: RoadmapTopic): StudyTopicSuggestion {
 	return {
 		id: topic.id,
@@ -116,25 +103,52 @@ function topicSuggestion(roadmap: RoadmapDataset, topic: RoadmapTopic): StudyTop
 	};
 }
 
-/** The root document a read session starts with. The tracks are ordinary
- *  suggestions, so the existing inline cards, tree ghosts and graph work. */
+/** The root document a read session starts with. Every roadmap main topic
+ *  is a real section, so the opening guide covers the whole subject; each
+ *  section's subtopics are suggestions that open focused deep dives. The
+ *  roadmap field keeps the track grouping for the map view. */
 export function roadmapRootSeed(roadmap: RoadmapDataset, now = new Date()): StudyDocument {
+	const sections: StudyDocument["sections"] = [{
+		id: "overview",
+		heading: "Overview",
+		body: [
+			`This guide follows the [${roadmap.title} roadmap](${roadmap.source}) on roadmap.sh.`,
+			`The ${roadmap.tracks.reduce((n, track) => n + track.topics.length, 0)} sections below are its main topics; each one lists the roadmap's subtopics. Read the summaries, and open a subtopic to go deeper.`,
+			"The guide is living: ask in the conversation to expand, simplify, or redirect anything.",
+		].join("\n\n"),
+	}];
+	for (const track of roadmap.tracks) {
+		for (const topic of track.topics) {
+			sections.push({
+				id: topic.id,
+				heading: topic.title,
+				body: `The roadmap's ${topic.title} topic covers ${topic.subtopics.map((sub) => sub.title).join(" · ")}.`,
+				suggestions: topic.subtopics.map((sub) => ({
+					id: sub.id,
+					heading: sub.title,
+					blurb: `${topic.title} roadmap subtopic.`,
+					roadmap: { slug: roadmap.slug, nodeId: `subtopic:${topic.id}:${sub.id}`, kind: "subtopic" },
+				})),
+			});
+		}
+	}
 	return {
 		id: STUDY_ROOT_DOCUMENT_ID,
 		title: roadmap.title,
 		revision: 1,
 		updatedAt: now.toISOString(),
 		status: "ready",
-		sections: [{
-			id: "overview",
-			heading: "Overview",
-			body: [
-				`This reading path is built from the [${roadmap.title} roadmap](${roadmap.source}) on roadmap.sh.`,
-				`The ${roadmap.tracks.length} tracks below follow its topics. Open a track to see the topics inside it, then open a topic to read the roadmap's subtopics in depth.`,
-				"The guide is living: ask in the conversation to expand, simplify, or redirect anything.",
-			].join("\n\n"),
-			suggestions: roadmap.tracks.map((track) => trackSuggestion(roadmap, track)),
-		}],
+		roadmap: {
+			slug: roadmap.slug,
+			title: roadmap.title,
+			source: roadmap.source,
+			tracks: roadmap.tracks.map((track) => ({
+				id: track.id,
+				title: track.title,
+				topicIds: track.topics.map((topic) => topic.id),
+			})),
+		},
+		sections,
 	};
 }
 
@@ -184,6 +198,19 @@ export function roadmapChildSeed(
 		return {
 			document: { ...child, title: found.topic.title, updatedAt: now.toISOString(), sections: [] },
 			context: `Roadmap topic: ${found.topic.title} (track: ${found.track.title}). Subtopics in roadmap order: ${subtopics.join("; ")}. Write one section per subtopic, in this order (group only closely related ones that read better together). Give every section its own deeper directions and self-check questions. This is the content the learner chose; do not replace it with a generic survey.`,
+		};
+	}
+	if (nodeId.startsWith("subtopic:")) {
+		const rest = nodeId.slice("subtopic:".length);
+		const split = rest.indexOf(":");
+		const topicId = split >= 0 ? rest.slice(0, split) : "";
+		const subtopicId = split >= 0 ? rest.slice(split + 1) : "";
+		const found = findTopic(roadmap, topicId);
+		const subtopic = found?.topic.subtopics.find((sub) => sub.id === subtopicId);
+		if (!found || !subtopic) return { document: child, context: "" };
+		return {
+			document: { ...child, title: subtopic.title, updatedAt: now.toISOString(), sections: [] },
+			context: `Roadmap subtopic: ${subtopic.title} (topic: ${found.topic.title}, track: ${found.track.title}). Write a focused deep-dive on this subtopic: one level deeper than the ${found.topic.title} summary, not a repeat of it. Start from what the reader already learned in that topic.`,
 		};
 	}
 	return { document: child, context: "" };

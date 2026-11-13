@@ -45,7 +45,7 @@ export const STUDY_TOTAL_MAX = 200_000;
  *  stay a readable record rather than an unbounded corpus. */
 export const STUDY_DOCUMENTS_MAX = 50;
 export const STUDY_DEPTH_MAX = 6;
-export const STUDY_SUGGESTIONS_MAX = 6;
+export const STUDY_SUGGESTIONS_MAX = 12;
 export const STUDY_SUGGESTION_HEADING_MAX = 160;
 export const STUDY_SUGGESTION_BLURB_MAX = 240;
 export const STUDY_QUESTIONS_MAX = 6;

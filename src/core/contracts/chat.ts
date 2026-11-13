@@ -38,7 +38,22 @@ export type ChatKind = "teach" | "practice" | "read";
 export interface StudyRoadmapRef {
 	slug: string;
 	nodeId: string;
-	kind: "track" | "topic";
+	kind: "track" | "topic" | "subtopic";
+}
+
+/** The roadmap grouping attached to a seeded root document. Labels and
+ *  hierarchy only — the guide prose is agent-written. */
+export interface StudyRoadmapTrack {
+	id: string;
+	title: string;
+	topicIds: string[];
+}
+
+export interface StudyRoadmapView {
+	slug: string;
+	title: string;
+	source: string;
+	tracks: StudyRoadmapTrack[];
 }
 
 export interface StudyTopicSuggestion {
@@ -106,6 +121,8 @@ export interface StudyDocument {
 	parent?: { documentId: string; sectionId: string; topicId: string };
 	/** Cross-links to related documents/chapters. */
 	related?: StudyRelatedLink[];
+	/** Imported-roadmap grouping (root seed only). */
+	roadmap?: StudyRoadmapView;
 	/** Generation state; absent reads as ready. */
 	status?: StudyDocumentStatus;
 }

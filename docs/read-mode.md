@@ -35,10 +35,12 @@ The mode exists because teach opens by probing (the learner answers questions be
 `StudyDocument` lives on the session record (`ChatRecord.document`), not in transcript messages:
 
 ```ts
-interface StudyTopicSuggestion { id: string; heading: string; blurb: string; documentId?: string; sectionId?: string }
+interface StudyRoadmapRef { slug: string; nodeId: string; kind: "track" | "topic" | "subtopic" }
+interface StudyTopicSuggestion { id: string; heading: string; blurb: string; documentId?: string; sectionId?: string; roadmap?: StudyRoadmapRef }
 interface StudySectionQuestion { id: string; question: string; answer: string }
 interface StudyRelatedLink { documentId: string; sectionId?: string; reason: string }
 interface StudySection { id: string; heading: string; body: string; suggestions?: StudyTopicSuggestion[]; questions?: StudySectionQuestion[] }
+interface StudyRoadmapView { slug: string; title: string; source: string; tracks: Array<{ id: string; title: string; topicIds: string[] }> }
 interface StudyDocument {
   id: string;                    // "root" | "doc_…"
   title: string;
@@ -47,6 +49,7 @@ interface StudyDocument {
   updatedAt: string;
   parent?: { documentId: string; sectionId: string; topicId: string };
   related?: StudyRelatedLink[];
+  roadmap?: StudyRoadmapView;    // seeded root only
   status?: "writing" | "ready" | "failed"; // absent reads ready
 }
 ```
@@ -178,9 +181,10 @@ slug, heading, blurb, optional existing `documentId`/`sectionId`) and
 `StudyRelatedLink` is document-level: `{documentId, sectionId?, reason}`.
 The graph draws it dashed; the reading footer lists it.
 
-Bounds: 50 documents per session, six levels below the root, six suggestions
-and six questions per chapter. Section/body/total limits stay as before per
-document.
+Bounds: 50 documents per session, six levels below the root, twelve suggestions
+at the hard ceiling (agent turns normally offer 2–4; roadmap seeds may use the
+full list) and six questions per chapter. Section/body/total limits stay as
+before per document.
 
 ### The turns
 
@@ -281,63 +285,69 @@ npm run roadmap:import -- angular
 `scripts/import-roadmap.mjs` fetches roadmap.sh's official graph
 (`/api/v1-official-roadmap/<slug>`), imposes the read-mode tree, and writes
 `data/roadmaps/<slug>.json` under the mutable data dir (gitignored). Only
-labels and hierarchy are stored — never roadmap.sh prose. The script maps
-the visual graph into six root tracks:
+labels and hierarchy are stored — never roadmap.sh prose. The Angular
+preset has 6 tracks, 26 main topics and 132 subtopics.
 
-- Foundations — Introduction, Components, Communication, Understand Binding
-- Templates & UI — Templates, Template Syntax, Pipes, Directives
-- Architecture & Data — Modules, Routing, Services & Remote Data, Forms, HTTP Client
-- Reactivity & State — RxJS Basics, Signals, State Management, Zones
-- Platform & Tooling — Developer Tools, SSR, SSG
-- Quality & Security — Security, Accessibility, Performance, Testing, Internationalization, Animation
-
-Each track holds 3–6 roadmap topics; each topic holds its roadmap
-subtopics. The mapping uses the roadmap's visual section boxes plus
-nearest-topic assignment, with a small correction table for labels that
-sit across a visual gap.
-
-### Session seed
+### The seeded opening
 
 `POST /api/chats` (read only) calls `seedRoadmapForChat` when the opening
-title names an imported roadmap. It writes a root document with:
+title names an imported roadmap. The root document starts with **every
+main topic as a real section**:
 
-- title = the roadmap title;
-- one `overview` section with a short attribution/link and **six track
-  suggestions** (each carrying a `roadmap: {slug, nodeId, kind}` pointer);
-- `readingDocumentId = "root"`.
+- an **Overview** section with the source link and usage note;
+- **26 topic sections**, each one-line seed body naming its subtopics;
+- each topic's **roadmap subtopics as suggestions** (up to 12), carrying
+  `roadmap: {slug, nodeId, kind:"subtopic"}` pointers;
+- a document-level `roadmap` field with the track grouping and source.
 
-The agent's first turn sees the seeded document (the `read-context` marker
-names it) and the prompt tells it not to write a blank version over a seed.
-The learner opens a track.
+This is the whole subject at a glance: the initial document lists all main
+topics, and the roadmap map shows every topic and subtopic before the
+learner commits a turn to any of them.
 
-### Child seeds
+The read agent's opening rule for a seeded root is to keep every section
+and suggestion, expand each one-line seed into a 2–4 sentence summary in
+roadmap order (split across edit calls), and add self-check questions where
+they fit. It does not replace the map with a new outline. Subtopic deep
+dives are separate child documents started by clicking a subtopic.
 
-When a suggestion carrying a roadmap pointer is chosen, the deeper route
-loads the preset and seeds the pending child before the writer turn:
+### Deep dives
 
-- **Track** — an `overview` section whose suggestions are the track's
-  topics, plus a `Roadmap context:` line for the writer. The agent builds
-  the track around the seeded topics.
-- **Topic** — an empty child plus a `Roadmap context:` line listing the
-  subtopics in roadmap order. The agent writes one section per subtopic,
-  with the usual directions and self-check questions.
-- The pointer survives agent edits by suggestion id; a refresh replaces it
-  with fresh agent-chosen directions.
+Clicking a subtopic suggestion (inline card, contents ghost, or map leaf)
+creates a child document and starts the writer with a `Roadmap context:`
+line. The child is a focused deep dive one level below its main topic; it
+gets its own sections, directions and questions. The parent pointer keeps
+the main topic/track context.
 
-### Graph and tree
+### The roadmap map
 
-Ungenerated suggestions are **ghost nodes**: dashed topic rows under their
-chapter in the contents drawer, and dashed suggestion nodes in the topic
-graph (section → suggestion). Clicking a ghost starts the same deeper turn
-as the inline card. When the child lands, the ghost is replaced by a real
-document node and its own chapters.
+When the root carries a `roadmap` field, the graph toggle opens a
+roadmap.sh-style map instead of the compact document graph:
+
+- a large, tall canvas with the subject title at the top;
+- **yellow main-topic nodes** on a central blue spine;
+- each topic's **cream subtopic nodes** in a bordered group box to the
+  left or right, alternating;
+- solid blue spine segments and dotted blue branch connectors;
+- track labels (Foundations, Templates & UI, …) across the canvas;
+- generated subtopics carry a green status dot; writing pulses blue,
+  failed is red.
+
+Main topic nodes open that section of the root guide. Subtopic nodes open
+the generated child or start its deep-dive turn. Pan, wheel zoom, fit width
+and fit-whole-map are available. The map is intentionally tall, like the
+roadmap.sh poster; it opens fit-to-width at the top.
+
+While the map is the full roadmap, the inline subtopic cards under a
+roadmap section are collapsed in a **Roadmap subtopics** accordion so the
+26-section guide stays readable. The contents drawer also lists each
+subtopic as a ghost row.
 
 ### Tests
 
-- `tests/roadmap-seed.test.ts` — title match, root seed, track/topic child
-  seeds, no-overwrite rule.
-- `tests/read-graph.test.ts` — ghost suggestion nodes and generated-child
-  suppression.
+- `tests/roadmap-seed.test.ts` — title match, the all-main-topic root
+  seed, track/topic/subtopic seeds, no-overwrite rule, route integration.
+- `tests/read-roadmap-graph.test.ts` — spine/side-box layout, alternating
+  branches, generated status, roadmap detection.
 
 ### Contract
 

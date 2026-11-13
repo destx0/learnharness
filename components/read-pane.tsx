@@ -35,6 +35,7 @@ import {
 } from "@/src/core";
 import { cn } from "@/lib/utils";
 import { ReadGraphView } from "./read-graph";
+import { isRoadmapDocument, RoadmapGraphView } from "./read-roadmap-graph";
 
 /**
  * THE READING PANE (read sessions, owner 2026-11-04; deeper tree 2026-11-12).
@@ -389,6 +390,7 @@ export function ReadDocumentView({
 }: ReadDocumentViewProps) {
 	const record = useMemo(() => recordOf(documents), [documents]);
 	const active = (activeDocumentId ? studyDocumentById(record, activeDocumentId) : null) ?? record.document;
+	const roadmapRoot = isRoadmapDocument(record.document) ? record.document : null;
 	const breadcrumb = active ? studyDocumentBreadcrumb(record, active.id) : [];
 	const parent = breadcrumb.length > 1 ? breadcrumb[breadcrumb.length - 2] : null;
 	const sections = active?.sections ?? [];
@@ -516,13 +518,24 @@ export function ReadDocumentView({
 				)}
 
 				{view === "graph" ? (
-					<ReadGraphView
-						documents={documents}
-						activeDocumentId={active?.id ?? ""}
-						onOpenDocument={onOpenDocument}
-						onGoDeeper={onGoDeeper}
-						className="min-w-0 flex-1"
-					/>
+					roadmapRoot ? (
+						<RoadmapGraphView
+							root={roadmapRoot}
+							documents={documents}
+							activeDocumentId={active?.id ?? ""}
+							onOpenDocument={onOpenDocument}
+							onGoDeeper={onGoDeeper}
+							className="min-w-0 flex-1"
+						/>
+					) : (
+						<ReadGraphView
+							documents={documents}
+							activeDocumentId={active?.id ?? ""}
+							onOpenDocument={onOpenDocument}
+							onGoDeeper={onGoDeeper}
+							className="min-w-0 flex-1"
+						/>
+					)
 				) : sections.length === 0 ? (
 					<EmptyDocument
 						document={active}
@@ -916,6 +929,7 @@ function ReadArticle({
 							docs={documents}
 							suggestingKey={suggestingKey}
 							canGoDeeper={canGoDeeper}
+							collapsed={document.roadmap !== undefined && (section.suggestions ?? []).some((topic) => topic.roadmap !== undefined)}
 							onSuggest={onSuggest}
 							onGoDeeper={onGoDeeper}
 							onOpenDocument={onOpenDocument}
@@ -1001,6 +1015,7 @@ function SectionDirections({
 	docs,
 	suggestingKey,
 	canGoDeeper,
+	collapsed = false,
 	onSuggest,
 	onGoDeeper,
 	onOpenDocument,
@@ -1012,6 +1027,7 @@ function SectionDirections({
 	docs: readonly StudyDocument[];
 	suggestingKey: string | null;
 	canGoDeeper: boolean;
+	collapsed?: boolean;
 	onSuggest: (documentId: string, sectionId: string) => void;
 	onGoDeeper: (documentId: string, sectionId: string, topicId: string) => void;
 	onOpenDocument: (documentId: string, sectionId?: string) => void;
@@ -1022,6 +1038,60 @@ function SectionDirections({
 	const children = docs.filter((doc) =>
 		doc.parent?.documentId === document.id && doc.parent.sectionId === sectionId,
 	);
+	const cards = suggestions.length > 0 ? (
+		<div className="grid gap-2 sm:grid-cols-2">
+			{suggestions.map((topic) => {
+				const child = children.find((doc) =>
+					doc.parent?.sectionId === sectionId && doc.parent.topicId === topic.id,
+				);
+				const existing = topic.documentId ? docs.find((doc) => doc.id === topic.documentId) : undefined;
+				const target = child ?? existing;
+				const status = child ? studyDocumentStatus(child) : null;
+				return (
+					<button
+						key={topic.id}
+						type="button"
+						onClick={() => {
+							if (child && status === "failed") onGoDeeper(document.id, sectionId, topic.id);
+							else if (target) onOpenDocument(target.id, topic.sectionId);
+							else onGoDeeper(document.id, sectionId, topic.id);
+						}}
+						className="group flex min-h-16 cursor-pointer flex-col items-start gap-1 rounded-md border border-border/60 px-3 py-2.5 text-left transition-colors hover:border-border hover:bg-accent/40"
+					>
+						<span className="flex w-full items-center gap-1.5 font-ui text-xs font-medium">
+							<span className="min-w-0 flex-1 truncate">{topic.heading}</span>
+							{status === "writing" ? (
+								<BrailleSpinner label="Writing" />
+							) : status === "failed" ? (
+								<TriangleAlertIcon className="size-3 shrink-0 text-destructive" />
+							) : target ? (
+								<ArrowUpRightIcon className="size-3 shrink-0 text-muted-foreground" />
+							) : (
+								<PlusIcon className="size-3 shrink-0 text-muted-foreground" />
+							)}
+						</span>
+						<span className="text-xs leading-relaxed text-muted-foreground">{topic.blurb}</span>
+						<span className="font-ui text-[10px] uppercase tracking-widest text-muted-foreground/50">
+							{status === "writing" ? "Writing…" : status === "failed" ? "Retry" : target ? "Open topic" : "Write this topic"}
+						</span>
+					</button>
+				);
+			})}
+		</div>
+	) : null;
+	if (collapsed && suggestions.length > 0) {
+		return (
+			<details className="group mt-6 rounded-md border border-border/60" data-testid="read-roadmap-subtopics">
+				<summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 font-ui text-[10px] font-medium uppercase tracking-widest text-muted-foreground/70 [&::-webkit-details-marker]:hidden">
+					<WaypointsIcon className="size-3.5 shrink-0" aria-hidden="true" />
+					Roadmap subtopics
+					<span className="font-normal normal-case tracking-normal text-muted-foreground/60">{suggestions.length}</span>
+					<ChevronDownIcon className="ml-auto size-3.5 shrink-0 text-muted-foreground/60 transition-transform group-open:rotate-180" aria-hidden="true" />
+				</summary>
+				<div className="border-t border-border/50 p-3">{cards}</div>
+			</details>
+		);
+	}
 	return (
 		<div className="mt-6" data-testid="read-section-deeper">
 			<div className="flex items-center gap-2">
@@ -1047,45 +1117,7 @@ function SectionDirections({
 					Thinking of directions…
 				</div>
 			) : suggestions.length > 0 ? (
-				<div className="mt-3 grid gap-2 sm:grid-cols-2">
-					{suggestions.map((topic) => {
-						const child = children.find((doc) =>
-							doc.parent?.sectionId === sectionId && doc.parent.topicId === topic.id,
-						);
-						const existing = topic.documentId ? docs.find((doc) => doc.id === topic.documentId) : undefined;
-						const target = child ?? existing;
-						const status = child ? studyDocumentStatus(child) : null;
-						return (
-							<button
-								key={topic.id}
-								type="button"
-								onClick={() => {
-									if (child && status === "failed") onGoDeeper(document.id, sectionId, topic.id);
-									else if (target) onOpenDocument(target.id, topic.sectionId);
-									else onGoDeeper(document.id, sectionId, topic.id);
-								}}
-								className="group flex min-h-16 cursor-pointer flex-col items-start gap-1 rounded-md border border-border/60 px-3 py-2.5 text-left transition-colors hover:border-border hover:bg-accent/40"
-							>
-								<span className="flex w-full items-center gap-1.5 font-ui text-xs font-medium">
-									<span className="min-w-0 flex-1 truncate">{topic.heading}</span>
-									{status === "writing" ? (
-										<BrailleSpinner label="Writing" />
-									) : status === "failed" ? (
-										<TriangleAlertIcon className="size-3 shrink-0 text-destructive" />
-									) : target ? (
-										<ArrowUpRightIcon className="size-3 shrink-0 text-muted-foreground" />
-									) : (
-										<PlusIcon className="size-3 shrink-0 text-muted-foreground" />
-									)}
-								</span>
-								<span className="text-xs leading-relaxed text-muted-foreground">{topic.blurb}</span>
-								<span className="font-ui text-[10px] uppercase tracking-widest text-muted-foreground/50">
-									{status === "writing" ? "Writing…" : status === "failed" ? "Retry" : target ? "Open topic" : "Write this topic"}
-								</span>
-							</button>
-						);
-					})}
-				</div>
+				<div className="mt-3">{cards}</div>
 			) : (
 				<button
 					type="button"

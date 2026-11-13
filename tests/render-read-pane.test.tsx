@@ -47,6 +47,32 @@ const CHILD: StudyDocument = {
 	related: [{ documentId: "root", sectionId: "overview", reason: "The overview sets up the notation." }],
 };
 
+const ROADMAP_ROOT: StudyDocument = {
+	id: "root",
+	title: "Angular",
+	revision: 1,
+	updatedAt: "2026-11-13T12:00:00.000Z",
+	status: "ready",
+	roadmap: {
+		slug: "angular",
+		title: "Angular",
+		source: "https://roadmap.sh/angular",
+		tracks: [{ id: "foundations", title: "Foundations", topicIds: ["components"] }],
+	},
+	sections: [
+		{ id: "overview", heading: "Overview", body: "The whole subject at a glance." },
+		{
+			id: "components",
+			heading: "Components",
+			body: "The roadmap's Components topic covers Selector and Template.",
+			suggestions: [
+				{ id: "selector", heading: "Selector", blurb: "Components roadmap subtopic.", roadmap: { slug: "angular", nodeId: "subtopic:components:selector", kind: "subtopic" } },
+				{ id: "template", heading: "Template", blurb: "Components roadmap subtopic.", roadmap: { slug: "angular", nodeId: "subtopic:components:template", kind: "subtopic" } },
+			],
+		},
+	],
+};
+
 function render(
 	documents: StudyDocument[],
 	activeDocumentId = "root",
@@ -132,6 +158,22 @@ describe("ReadDocumentView — the reading surface", () => {
 		assert.ok(html.includes('data-testid="read-pane-toc"'));
 		assert.ok(html.includes("Contents"));
 		assert.ok(html.includes(">Eigenvectors<"));
+	});
+
+	it("renders the roadmap-style map for a seeded root", () => {
+		const html = render([ROADMAP_ROOT], "root", { view: "graph" });
+		assert.ok(html.includes('data-testid="read-roadmap-graph"'));
+		assert.ok(html.includes("Topic map"));
+		assert.ok(html.includes("Foundations"));
+		assert.ok(html.includes(">Components<"));
+		assert.ok(html.includes(">Selector<"));
+	});
+
+	it("collapses roadmap subtopics in the reading view", () => {
+		const html = render([ROADMAP_ROOT]);
+		assert.ok(html.includes('data-testid="read-roadmap-subtopics"'));
+		assert.ok(html.includes("Roadmap subtopics"));
+		assert.ok(html.includes("Selector"));
 	});
 
 	it("renders the topic graph with document and chapter nodes", () => {

@@ -73,6 +73,11 @@ describe("read deeper input parsing", () => {
 		});
 		assert.throws(() => parseChatInput({ type: "suggest-deeper", documentId: "root" }), ChatInputError);
 		assert.throws(() => parseChatInput({ type: "go-deeper", documentId: "root", sectionId: "maps", topicId: "eigen" }), ChatInputError);
+		assert.deepEqual(parseChatInput({ type: "more-questions", documentId: "root", sectionId: "maps" }), {
+			type: "more-questions",
+			documentId: "root",
+			sectionId: "maps",
+		});
 	});
 });
 
@@ -139,6 +144,22 @@ describe("read deeper input appends", () => {
 		const appends = inputAppends(rec, { type: "text", text: "Angular" });
 		const context = appends[0] as LhMarkerMessage | undefined;
 		assert.match(context?.content ?? "", /roadmap-seeded starting graph/);
+	});
+
+	it("writes a hidden more-questions marker naming the chapter", () => {
+		const [marker] = inputAppends(record(), {
+			type: "more-questions",
+			documentId: "root",
+			sectionId: "maps",
+		}) as [LhMarkerMessage | undefined];
+		assert.equal(marker?.customType, "read-questions");
+		assert.equal(marker?.display, false);
+		assert.match(marker?.content ?? "", /more self-check questions/);
+		assert.match(marker?.content ?? "", /keep every existing question/i);
+		assert.throws(
+			() => inputAppends(record(), { type: "more-questions", documentId: "root", sectionId: "nope" }),
+			(err) => err instanceof ChatInputError && /targets no chapter/.test(err.message),
+		);
 	});
 
 	it("carries the roadmap context into a chosen deeper turn", () => {

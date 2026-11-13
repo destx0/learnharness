@@ -56,6 +56,8 @@ export interface RoadmapGraphSubtopicNode {
 	documentId: string;
 	sectionId: string;
 	topicId: string;
+	/** Generated overview, used in the node tooltip. */
+	blurb?: string;
 	x: number;
 	y: number;
 	width: number;
@@ -226,6 +228,7 @@ export function buildRoadmapGraph(
 					documentId: root.id,
 					sectionId: spec.section.id,
 					topicId: suggestion.id,
+					...(suggestion.blurb ? { blurb: suggestion.blurb } : {}),
 					x: boxX + BOX_PAD + column * (LEAF_W + LEAF_GAP_X),
 					y: boxY + BOX_PAD + row * (LEAF_H + LEAF_GAP_Y),
 					width: LEAF_W,
@@ -544,7 +547,7 @@ export function RoadmapGraphView({
 											}
 										}}
 									>
-										<title>{node.label}</title>
+										<title>{node.blurb ? `${node.label} — ${node.blurb}` : node.label}</title>
 										<rect
 											width={node.width}
 											height={node.height}

@@ -66,17 +66,20 @@ The pane derives its chapter list from the sections and its tree from the parent
   - `10-doctrine.md` — how to write a good study document and how to revise it.
   - `20-deeper.md` — the document tree, suggestion turns, child-document doctrine, related links, and bounds.
 - Shared prompt appendix (curated): voice, accuracy, learner files, formatting. The thinking-field and question-tool fragments stay out.
-- Tool registry (`createReadTools`): `edit_document`, `read_document`, `suggest_deeper`, `list_documents`, `read`, `ls`, `find`, `grep`, `research`, `pdf` (the job tools remain user-toggleable).
+- Tool registry (`createReadTools`): `edit_document`, `read_document`, `describe_subtopics`, `suggest_deeper`, `list_documents`, `read`, `ls`, `find`, `grep`, `research`, `pdf` (the job tools remain user-toggleable).
 - Built from turn 1, like practice: no prober→teacher split.
 
 ### Document tools
 
 - **`edit_document`** — server-executed. Upserts sections by id, removes by id, reorders with `order`, renames with `title`, replaces cross-links with `related`, and (on a section patch) carries `suggestions` (2–4 deeper directions) and `questions` (1–3 self-check Q&A pairs). The first call must set the title. Validation failures return `ok:false` with the problems (the `plan_init` retry pattern). Writes the target document through `ChatStore.saveDocument` and emits `document-changed`.
 - **`read_document`** — returns one document (or one section), targeted by id.
+- **`describe_subtopics`** — writes the generated one-line overviews of a chapter's roadmap subtopics by id, without changing titles or roadmap pointers. Parallel batches merge safely.
 - **`suggest_deeper`** — regenerates one chapter's directions (the refresh path).
 - **`list_documents`** — the whole tree with ids, chapter ids, suggestions, and related links.
 
-The pure patch engine is `src/core/study-document.ts`: `applyStudyDocumentEdit`, `applyStudySuggestions`, `StudyDocumentError`, TOC/markdown/outline/word-count projections. All shape judgments live there, not in the store.
+The pure patch engine is `src/core/study-document.ts`: `applyStudyDocumentEdit`, `applyStudySuggestions`, `applyStudySubtopicBlurbs`, `StudyDocumentError`, TOC/markdown/outline/word-count projections. All shape judgments live there, not in the store.
+
+Document writes are serialized per session even though the tools run in parallel, so several independent `edit_document` / `describe_subtopics` / `suggest_deeper` calls can share a batch without clobbering each other.
 
 ## Live updates
 
@@ -183,8 +186,8 @@ slug, heading, blurb, optional existing `documentId`/`sectionId`) and
 The graph draws it dashed; the reading footer lists it.
 
 Bounds: 50 documents per session, six levels below the root, twelve suggestions
-at the hard ceiling (agent turns normally offer 2–4; roadmap seeds may use the
-full list) and six questions per chapter. Section/body/total limits stay as
+per `edit_document` call (roadmap seeds may carry the full subtopic list; use
+`describe_subtopics` to update it by id) and twenty questions per chapter (the initial pass writes 1–3; “Generate more questions” adds more). Section/body/total limits stay as
 before per document.
 
 ### The turns
@@ -197,6 +200,8 @@ The learner's clicks are hidden session markers, not chat bubbles:
 - `go-deeper` → the server pre-creates the child (`status:"writing"`), makes
   it the active document, then appends a `read-deeper` marker and starts the
   writer turn. The agent writes with `edit_document` and the child's id.
+- `more-questions` → `read-questions` marker. The agent reads the chapter,
+  keeps the existing questions, and adds 2–3 new ones with `edit_document`.
 - Ordinary chat text gets a `read-context` marker when the open document
   changed (or after compaction), so "expand this" targets what is on screen.
 
@@ -209,10 +214,12 @@ none → `failed` (the pane offers Retry, which reuses the same child id).
   replace-whole, and the existing section patch/remove/order fields.
 - `read_document` — one document or one section, targeted.
 - `suggest_deeper` — store 2–4 directions for one chapter.
+- `describe_subtopics` — write roadmap subtopic overviews by id, in
+  parallel-safe batches.
 - `list_documents` — the whole tree with section ids, suggestion ids and
   related links; the agent's map for suggestions and cross-links.
-- `edit_document` / `read_document` / `suggest_deeper` / `list_documents`
-  are internal work for the continuation fold (no phantom wake).
+- The document tools are internal work for the continuation fold (no
+  phantom wake).
 
 The prompt's `read/20-deeper.md` carries the doctrine: a child continues
 from its parent chapter, delivers the chosen direction, avoids duplicates,
@@ -225,6 +232,8 @@ and links only genuinely related documents.
 - `POST /api/chats/[id]/document/suggest` → start the suggestion turn.
 - `POST /api/chats/[id]/document/deeper` → create/reopen the child, start
   the writer turn, return it.
+- `POST /api/chats/[id]/document/questions` → generate more self-check
+  questions for one chapter.
 - `POST /api/chats/[id]/document/related/remove` → drop one cross-link.
 
 `document-changed` carries `{chatId, documentId}` (optional for old
@@ -242,8 +251,9 @@ listeners); the pane refetches all documents on a short debounce.
   "Suggest deeper topics" button.
 - Self-check questions render above the deeper block as a native `<details>`
   accordion, collapsed by default. Opening it lists each question; opening a
-  question reveals its model answer. A chapter without questions renders
-  nothing.
+  question reveals its model answer. A **Generate more questions** button at
+  the end of the accordion asks the agent for 2–3 additional questions while
+  keeping the existing set. A chapter without questions renders nothing.
 - Related links render as a footer list with a remove affordance.
 - The graph toggle opens a dagre-laid-out SVG (documents left, chapters
   right, deeper branches further right; dashed related curves). Chapter
@@ -257,7 +267,8 @@ listeners); the pane refetches all documents on a short debounce.
 - `tests/study-document.test.ts` — authored suggestions/questions, child
   creation, depth, breadcrumb, related links, tree text.
 - `tests/read-agent.test.ts` — tool registry, targeted child edits,
-  `suggest_deeper`, `list_documents`, prompt paths.
+  `describe_subtopics`, serialized parallel edits, `suggest_deeper`,
+  `list_documents`, prompt paths.
 - `tests/read-deeper-input.test.ts` — parse + hidden markers + active-document
   context.
 - `tests/read-document-route.test.ts` — GET shape, active-document route,
@@ -265,7 +276,8 @@ listeners); the pane refetches all documents on a short debounce.
 - `tests/read-graph.test.ts` — graph projection, ghost suggestions, generated-child suppression, deterministic layout.
 - `tests/roadmap-seed.test.ts` — roadmap.sh import seed behavior.
 - `tests/render-read-pane.test.tsx` — drawer, breadcrumb, suggestions,
-  self-check accordion, related links, graph toggle, failed/empty states.
+  self-check accordion and “Generate more questions”, related links, graph
+  toggle, failed/empty states.
 - `tests/chat-kind.test.ts` — child upsert + list payload exclusion.
 
 Status: implemented 2026-11-12.
@@ -318,7 +330,7 @@ main topic as a real section**:
 
 - an **Overview** section with the source link and usage note;
 - **26 topic sections**, each one-line seed body naming its subtopics;
-- each topic's **roadmap subtopics as suggestions** (up to 12), carrying
+- each topic's **roadmap subtopics as suggestions**, carrying
   `roadmap: {slug, nodeId, kind:"subtopic"}` pointers;
 - a document-level `roadmap` field with the track grouping and source.
 
@@ -328,9 +340,16 @@ learner commits a turn to any of them.
 
 The read agent's opening rule for a seeded root is to keep every section
 and suggestion, expand each one-line seed into a 2–4 sentence summary in
-roadmap order (split across edit calls), and add self-check questions where
-they fit. It does not replace the map with a new outline. Subtopic deep
-dives are separate child documents started by clicking a subtopic.
+roadmap order, give **every roadmap subtopic** a 1–2 sentence overview with
+`describe_subtopics`, and add self-check questions where they fit. It splits
+the work into several calls and issues them together in parallel batches;
+writes serialize per session. It does not replace the map with a new
+outline. Subtopic deep dives are separate child documents started by
+clicking a subtopic.
+
+The subtopic overviews are visible in the collapsed Roadmap subtopics
+cards and the roadmap map's hover title. The full subtopic deep dive is
+still generated on click.
 
 ### Deep dives
 
@@ -339,6 +358,18 @@ creates a child document and starts the writer with a `Roadmap context:`
 line. The child is a focused deep dive one level below its main topic; it
 gets its own sections, directions and questions. The parent pointer keeps
 the main topic/track context.
+
+### Background agents
+
+While a read document tool is working, the sidebar's **Background agents**
+strip shows a "Guide writer" row for that session: the session title plus
+the current activity ("Writing summaries · Components", "Subtopic
+overviews · Components (12)", "Adding self-check questions"). It starts
+when a roadmap generation turn begins (and on the first document write for
+other edit turns) and clears at turn settlement. Cost/context read
+"—" because the turn's usage lands in the session ledger at settlement.
+There is no abort control on this row; the chat's Stop button owns the
+foreground turn.
 
 ### The roadmap map
 
@@ -353,8 +384,8 @@ roadmap.sh-style map instead of the compact document graph:
 - solid primary spine segments and dashed primary branch connectors;
 - theme colors throughout (the layout is roadmap.sh's, not its palette);
 - track labels (Foundations, Templates & UI, …) across the canvas;
-- generated subtopics carry a green status dot; writing pulses blue,
-  failed is red.
+- generated subtopics carry a primary status dot; writing pulses, failed
+  uses the destructive color.
 
 Main topic nodes open that section of the root guide. Subtopic nodes open
 the generated child or start its deep-dive turn. Pan, wheel zoom, fit width
@@ -373,6 +404,8 @@ subtopic as a ghost row.
   route integration.
 - `tests/read-roadmap-graph.test.ts` — spine/side-box layout, alternating
   branches, generated status, roadmap detection.
+- `tests/read-generation.test.ts` — Background agents read-generation
+  registry (one row per chat, updates, settlement clear).
 
 ### Contract
 

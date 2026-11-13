@@ -56,6 +56,7 @@ import { sideChats, type SideChatService } from "./side-chat.ts";
 import { SIDE_CONTEXT_BUDGET_ERROR, sideBudgetRetryDrops, sideContextWindow } from "./side-context-budget.ts";
 import { registerTurn, rememberTurnFailure, unregisterTurn } from "./turn-runs.ts";
 import { persistTurn, triggerExtraction, TurnPersistenceError } from "./turn-service.ts";
+import { finishReadGeneration, noteReadGeneration } from "../core/read-generation.ts";
 import { finalizeReadDocuments } from "./read-documents.ts";
 import { hasProbeDone, hasUnresolvedQuestion, pendingPluginQuestionOf, pluginQuestionCallsOf, questionCallsOf } from "../core/native-messages.ts";
 import { samePluginQuestionOccurrence } from "../core/plugin-questions.ts";
@@ -574,6 +575,12 @@ export async function handleChatInput(
 	}
 
 	turnClaimed = true;
+	// Roadmap generation is a foreground turn, but the Background agents
+	// strip should show what is being generated while the model plans and
+	// writes. The document tools update this row in place; settlement clears it.
+	const generationTurn = input.type === "go-deeper" || input.type === "more-questions" || input.type === "suggest-deeper" ||
+		(record.kind === "read" && record.document?.roadmap !== undefined && record.messages.length === 0);
+	if (generationTurn) noteReadGeneration(chatId, record.title, "Planning", "Planning the generation pass");
 
 	// Write-ahead persistence: the input's native appends go on disk BEFORE
 	// the turn starts - the learner's answer is durable the instant the
@@ -929,6 +936,7 @@ export async function handleChatInput(
 				// ready (content landed) or failed (the writer stopped empty)
 				// BEFORE endTurn emits turn-settled.
 				finalizeReadDocuments(stores.chatStore, chatId);
+				finishReadGeneration(chatId);
 				// Any helper activity after the last model call stays pending;
 				// settlement never injects it behind the agent's context.
 				// LAST: a poller that sees not-in-flight must read an already-persisted
@@ -1041,6 +1049,7 @@ export async function handleChatInput(
 			try {
 				if (!preparation || preparation.isCurrent()) applyParkedDismissal(stores.chatStore, chatId);
 				finalizeReadDocuments(stores.chatStore, chatId);
+				finishReadGeneration(chatId);
 			} catch (err) { console.error(`[chat ${chatId}] parked dismissal failed:`, err); }
 			finally {
 				if (!preparation || preparation.isCurrent()) unregisterLiveAgent(chatId);

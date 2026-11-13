@@ -44,6 +44,7 @@ import {
 	newProblemDismissedMarker,
 	newReadContextMessage,
 	newReadDeeperMessage,
+	newReadQuestionsMessage,
 	newReadSuggestMessage,
 	newThinkingMessage,
 	newUserMessage,
@@ -87,7 +88,9 @@ export type ChatInput =
 	| { type: "suggest-deeper"; documentId: string; sectionId: string }
 	/** Read mode's topic choice: the server has already created the
 	 *  pending child document; this starts the writing turn. */
-	| { type: "go-deeper"; documentId: string; sectionId: string; topicId: string; childDocumentId: string; roadmapContext?: string };
+	| { type: "go-deeper"; documentId: string; sectionId: string; topicId: string; childDocumentId: string; roadmapContext?: string }
+	/** Read mode's "Generate more questions" click in a self-check block. */
+	| { type: "more-questions"; documentId: string; sectionId: string };
 
 /** A wake-pipeline steer delivery — same turn composition, server-origin.
  *  Wave C (2026-09-26): the idle wake carries EVERY queued marker as its
@@ -298,6 +301,11 @@ export function parseChatInput(input: unknown): ChatInput {
 			if (typeof i.sectionId !== "string" || !i.sectionId) throw new ChatInputError("suggest-deeper requires sectionId");
 			return { type: "suggest-deeper", documentId: i.documentId, sectionId: i.sectionId };
 		}
+		case "more-questions": {
+			if (typeof i.documentId !== "string" || !i.documentId) throw new ChatInputError("more-questions requires documentId");
+			if (typeof i.sectionId !== "string" || !i.sectionId) throw new ChatInputError("more-questions requires sectionId");
+			return { type: "more-questions", documentId: i.documentId, sectionId: i.sectionId };
+		}
 		case "go-deeper": {
 			if (typeof i.documentId !== "string" || !i.documentId) throw new ChatInputError("go-deeper requires documentId");
 			if (typeof i.sectionId !== "string" || !i.sectionId) throw new ChatInputError("go-deeper requires sectionId");
@@ -411,6 +419,20 @@ export function inputAppends(
 				);
 			}
 			return [newReadSuggestMessage({
+				documentId: document.id,
+				documentTitle: document.title,
+				sectionId: section.id,
+				sectionHeading: section.heading,
+			})];
+		}
+		case "more-questions": {
+			if (record.kind !== "read") throw new ChatInputError("more-questions input is a reading-session affordance");
+			const document = studyDocumentById(record, input.documentId);
+			const section = document?.sections.find((candidate) => candidate.id === input.sectionId);
+			if (!document || !section) {
+				throw new ChatInputError("more-questions targets no chapter");
+			}
+			return [newReadQuestionsMessage({
 				documentId: document.id,
 				documentTitle: document.title,
 				sectionId: section.id,

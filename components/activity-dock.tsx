@@ -67,6 +67,16 @@ export interface FeedExtraction {
 	startedAt: number;
 }
 
+export interface FeedReadGeneration {
+	id: string;
+	chatId: string;
+	title: string;
+	phase: string;
+	activity: string;
+	startedAt: number;
+	updatedAt: number;
+}
+
 export interface FeedPluginWorker {
 	id: string;
 	taskId: string;
@@ -88,9 +98,11 @@ export interface ActivityFeed {
 	/** Optional for older payloads and consumers; current server always sends it. */
 	pluginWorkers?: FeedPluginWorker[];
 	extractions: FeedExtraction[];
+	/** Foreground read float/document generation, surfaced on request. */
+	readGenerations?: FeedReadGeneration[];
 }
 
-const EMPTY_FEED: ActivityFeed = { jobs: [], pluginWorkers: [], extractions: [] };
+const EMPTY_FEED: ActivityFeed = { jobs: [], pluginWorkers: [], extractions: [], readGenerations: [] };
 
 // ─── The activity feed (composition root: the root layout) ───────────────────
 
@@ -127,7 +139,12 @@ export function ActivityProvider({ children }: { children: React.ReactNode }) {
 				if (res.ok) {
 					const data = (await res.json()) as Partial<ActivityFeed>;
 					if (alive)
-						setFeed({ jobs: data.jobs ?? [], pluginWorkers: data.pluginWorkers ?? [], extractions: data.extractions ?? [] });
+						setFeed({
+							jobs: data.jobs ?? [],
+							pluginWorkers: data.pluginWorkers ?? [],
+							extractions: data.extractions ?? [],
+							readGenerations: data.readGenerations ?? [],
+						});
 				}
 			} catch {
 				// transport blip: keep the last feed, announce again next event
@@ -187,7 +204,7 @@ export interface ActivityBlob {
 	/** job.id, or the extraction job's row id (source id, or "src#i" for
 	 *  chunk jobs — unique per row, per-chunk jobs owner 2026-09-28). */
 	id: string;
-	process: "job" | "plugin-worker" | "extraction";
+	process: "job" | "plugin-worker" | "extraction" | "read";
 	/** Sub-agent kind for jobs (extraction blobs have none). */
 	jobKind?: JobKind;
 	/** Extraction phase (extracting/auditing/merging/embedding); jobs carry none. */
@@ -282,6 +299,19 @@ export function toBlobs(feed: ActivityFeed): ActivityBlob[] {
 			cost: null, // extraction runs don't ride the money channel (v1)
 			context: null,
 			activity: "",
+		});
+	}
+	for (const run of feed.readGenerations ?? []) {
+		blobs.push({
+			id: run.id,
+			process: "read",
+			phase: run.phase,
+			title: run.title,
+			chatId: run.chatId,
+			startedAt: run.startedAt,
+			cost: null,
+			context: null,
+			activity: run.activity,
 		});
 	}
 	blobs.sort((a, b) => a.startedAt - b.startedAt);
@@ -422,9 +452,11 @@ function ActivityBlobRow({
 	abortState: AbortState | undefined;
 	onAbort: () => void;
 }) {
-	const Icon = blob.process === "extraction" ? WaypointsIcon : (blob.jobKind && KIND_ICON[blob.jobKind]) || BotIcon;
+	const Icon = blob.process === "read" ? PenToolIcon : blob.process === "extraction" ? WaypointsIcon : (blob.jobKind && KIND_ICON[blob.jobKind]) || BotIcon;
 	const label =
-		blob.process === "extraction"
+		blob.process === "read"
+			? "Guide writer"
+			: blob.process === "extraction"
 			? `Extraction — ${blob.phase ?? "running"}`
 			: blob.jobKind === "research"
 				? "Researcher"
@@ -468,17 +500,19 @@ function ActivityBlobRow({
 			{/* The explicit END always on the blob's face (SCOPE) — the popover
 			    is for DETAIL, not the control. A failed abort locks the button and
 			    says why; a succeeded one just makes the blob vanish on refresh. */}
-			<button
-				type="button"
-				data-testid="activity-abort"
-				onClick={onAbort}
-				disabled={abortState !== undefined}
-				title={abortState === "failed" ? "Abort failed — try again" : "End this background process"}
-				aria-label={`End ${label} in ${blob.title}`}
-				className="absolute right-1 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground/70 transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
-			>
-				<SquareIcon className="size-3" />
-			</button>
+			{blob.process !== "read" && (
+				<button
+					type="button"
+					data-testid="activity-abort"
+					onClick={onAbort}
+					disabled={abortState !== undefined}
+					title={abortState === "failed" ? "Abort failed — try again" : "End this background process"}
+					aria-label={`End ${label} in ${blob.title}`}
+					className="absolute right-1 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground/70 transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+				>
+					<SquareIcon className="size-3" />
+				</button>
+			)}
 
 			{detailOpen && (
 				<div

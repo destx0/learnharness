@@ -12,6 +12,7 @@ import { describe, it } from "node:test";
 import {
 	applyStudyDocumentEdit,
 	applyStudySuggestions,
+	applyStudySubtopicBlurbs,
 	createChildStudyDocument,
 	removeStudyRelatedLink,
 	StudyDocumentError,
@@ -358,6 +359,52 @@ describe("authoring directions and self-check questions with a section", () => {
 				sections: [{ id: "maps", questions: [{ id: "q", question: "", answer: "A." }] }],
 			}, NOW),
 			(err) => err instanceof StudyDocumentError && /question must not be empty/.test(err.message),
+		);
+	});
+});
+
+
+describe("generated subtopic overviews", () => {
+	it("updates blurbs by id and keeps titles and roadmap pointers", () => {
+		const doc = applyStudyDocumentEdit(undefined, {
+			title: "Linear algebra",
+			sections: [{
+				id: "maps",
+				heading: "Linear maps",
+				body: "A map preserves structure.",
+				suggestions: [
+					{ id: "eigen", heading: "Eigenvectors", blurb: "Old.", roadmap: { slug: "angular", nodeId: "subtopic:maps:eigen", kind: "subtopic" } },
+					{ id: "rank", heading: "Rank", blurb: "Old." },
+				],
+			}],
+		}, NOW);
+		const next = applyStudySubtopicBlurbs(doc, "maps", [
+			{ id: "eigen", blurb: "Directions a map leaves fixed, and why they matter." },
+		], NOW);
+		const section = next.sections[0]!;
+		assert.equal(section.suggestions?.[0]?.blurb, "Directions a map leaves fixed, and why they matter.");
+		assert.equal(section.suggestions?.[0]?.heading, "Eigenvectors");
+		assert.deepEqual(section.suggestions?.[0]?.roadmap, { slug: "angular", nodeId: "subtopic:maps:eigen", kind: "subtopic" });
+		assert.equal(section.suggestions?.[1]?.blurb, "Old.");
+		assert.equal(next.revision, doc.revision + 1);
+	});
+
+	it("rejects unknown or duplicate ids and empty blurbs", () => {
+		const doc = applyStudyDocumentEdit(undefined, {
+			title: "T",
+			sections: [{ id: "s", heading: "S", body: "B", suggestions: [{ id: "a", heading: "A", blurb: "Old." }] }],
+		}, NOW);
+		assert.throws(
+			() => applyStudySubtopicBlurbs(doc, "s", [{ id: "nope", blurb: "X." }]),
+			(err) => err instanceof StudyDocumentError && /no roadmap subtopic with id "nope"/.test(err.message),
+		);
+		assert.throws(
+			() => applyStudySubtopicBlurbs(doc, "s", [{ id: "a", blurb: "One." }, { id: "a", blurb: "Two." }]),
+			(err) => err instanceof StudyDocumentError && /appears more than once/.test(err.message),
+		);
+		assert.throws(
+			() => applyStudySubtopicBlurbs(doc, "s", [{ id: "a", blurb: "" }]),
+			(err) => err instanceof StudyDocumentError && /blurb must not be empty/.test(err.message),
 		);
 	});
 });

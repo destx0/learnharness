@@ -89,7 +89,8 @@ export interface LhMarkerMessage {
 		| "side-question-told"
 		| "read-context"
 		| "read-suggest"
-		| "read-deeper";
+		| "read-deeper"
+		| "read-questions";
 	/** The model-facing text ("" for plan blocks — UI-only). */
 	content: string;
 	display: boolean;
@@ -422,6 +423,8 @@ export interface ReadSuggestDetails {
 	sectionHeading: string;
 }
 
+export interface ReadQuestionsDetails extends ReadSuggestDetails {}
+
 export interface ReadDeeperDetails extends ReadSuggestDetails {
 	topicId: string;
 	topicHeading: string;
@@ -451,6 +454,19 @@ export function newReadSuggestMessage(details: ReadSuggestDetails): LhMarkerMess
 		role: "custom",
 		customType: "read-suggest",
 		content: `[Session context] The learner asked for deeper-topic directions for the chapter "${details.sectionHeading}" (${details.sectionId}) in the study document "${details.documentTitle}" (${details.documentId}). Read that chapter with read_document(documentId="${details.documentId}", sectionId="${details.sectionId}") and call suggest_deeper with 2–4 genuinely deeper directions. Do not write a child document yet — the learner picks a direction first.`,
+		display: false,
+		details,
+		timestamp: Date.now(),
+	};
+}
+
+/** "Generate more questions" in a chapter's self-check accordion. */
+export function newReadQuestionsMessage(details: ReadQuestionsDetails): LhMarkerMessage {
+	return {
+		id: newMessageId(),
+		role: "custom",
+		customType: "read-questions",
+		content: `[Session context] The learner asked for more self-check questions for the chapter "${details.sectionHeading}" (${details.sectionId}) in "${details.documentTitle}" (${details.documentId}). Read that section, then add 2–3 NEW questions with model answers to the existing set with edit_document. Keep every existing question and answer, do not duplicate, and do not rewrite the section body.`,
 		display: false,
 		details,
 		timestamp: Date.now(),
@@ -1053,7 +1069,7 @@ export function nativeInputCause(message: AgentMessage, history: readonly AgentM
 	if (message.role === "system" || message.role === "assistant") return "neutral";
 	if (message.role === "custom") {
 		if (["probe-handoff", "subagent-steer", "subagent-abort"].includes(message.customType)) return "automatic";
-		if (["practice-thinking", "plugin-problem-submission", "practice-next", "read-suggest", "read-deeper"].includes(message.customType)) return "learner";
+		if (["practice-thinking", "plugin-problem-submission", "practice-next", "read-suggest", "read-deeper", "read-questions"].includes(message.customType)) return "learner";
 		return ["graph-context", "plan-block", "problem-dismissed", "compaction", "side-question", "side-question-told", "read-context"].includes(message.customType) ? "neutral" : "unrecognizable";
 	}
 	if (message.role === "toolResult") {

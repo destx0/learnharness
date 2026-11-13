@@ -39,7 +39,9 @@ explicitly name another. When in doubt, `list_documents` first.
 
 Some read sessions start from an imported roadmap (currently roadmap.sh's
 Angular roadmap). Its root document already has every main topic as a
-section, with each topic's roadmap subtopics as suggestions. A
+section, with each topic's roadmap subtopics as suggestions. The first pass
+writes both levels: main-topic summaries with `edit_document` and subtopic
+overviews with `describe_subtopics` (parallel batches are safe). A
 `read-deeper` turn for a roadmap subtopic carries a `Roadmap context:` line:
 write a focused deep-dive one level below the main topic, starting from what
 the reader already learned there. Keep the roadmap sections and suggestions

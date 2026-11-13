@@ -86,6 +86,8 @@ describe("the read agent's prompt", () => {
 		assert.doesNotMatch(prompt, /probe_done/);
 		assert.doesNotMatch(prompt, /plan_init/);
 		assert.match(prompt, /deeper/i);
+		assert.match(prompt, /describe_subtopics/);
+		assert.match(prompt, /Generate more questions/);
 	});
 
 	it("is a discoverable prompt segment set (overrides can target it)", () => {
@@ -102,6 +104,7 @@ describe("the read agent's tool registry", () => {
 		const { store } = fakeStore(record());
 		const keys = Object.keys(toolsOf(store)).sort();
 		assert.deepEqual(keys, [
+			"describe_subtopics",
 			"edit_document",
 			"find",
 			"grep",
@@ -154,6 +157,43 @@ describe("the read agent's tool registry", () => {
 		const section = get().document?.sections[0];
 		assert.equal(section?.suggestions?.[0]?.id, "eigen");
 		assert.equal(section?.questions?.[0]?.answer, "Addition and scaling.");
+	});
+
+	it("describes roadmap subtopics by id without touching their titles", async () => {
+		const { store, get } = fakeStore(record());
+		const tools = toolsOf(store);
+		await tools[EDIT_DOCUMENT_TOOL]!.execute("call_1", {
+			title: "Linear algebra",
+			sections: [{
+				id: "maps",
+				heading: "Linear maps",
+				body: "A map preserves structure.",
+				suggestions: [{ id: "eigen", heading: "Eigenvectors", blurb: "Old." }],
+			}],
+		} as never);
+		const described = await tools.describe_subtopics!.execute("call_2", {
+			sectionId: "maps",
+			subtopics: [{ id: "eigen", blurb: "Directions a map leaves fixed." }],
+		} as never);
+		assert.equal((described.details as { ok?: boolean }).ok, true);
+		const section = get().document?.sections[0];
+		assert.equal(section?.suggestions?.[0]?.blurb, "Directions a map leaves fixed.");
+		assert.equal(section?.suggestions?.[0]?.heading, "Eigenvectors");
+	});
+
+	it("serializes parallel edit_document calls per session", async () => {
+		const { store, get } = fakeStore(record());
+		const tools = toolsOf(store);
+		await Promise.all([
+			tools[EDIT_DOCUMENT_TOOL]!.execute("call_1", {
+				title: "Parallel",
+				sections: [{ id: "one", heading: "One", body: "First." }],
+			} as never),
+			tools[EDIT_DOCUMENT_TOOL]!.execute("call_2", {
+				sections: [{ id: "two", heading: "Two", body: "Second." }],
+			} as never),
+		]);
+		assert.deepEqual(get().document?.sections.map((section) => section.id), ["one", "two"]);
 	});
 
 	it("suggests deeper directions for one chapter and lists the tree", async () => {

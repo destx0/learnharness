@@ -105,6 +105,7 @@ describe("ReadDocumentView — the reading surface", () => {
 		assert.ok(html.includes("Check yourself"));
 		assert.ok(html.includes("What makes a space a vector space?"));
 		assert.ok(html.includes("It is closed under addition and scaling."));
+		assert.ok(html.includes("Generate more questions"));
 		// The document is the main view: no close affordance unless the host
 		// explicitly asks for one.
 		assert.equal(html.includes('data-testid="read-pane-close"'), false);

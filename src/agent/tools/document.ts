@@ -9,6 +9,7 @@ import {
 } from "../../core/contracts/chat.ts";
 import {
 	applyStudyDocumentEdit,
+	applyStudySubtopicBlurbs,
 	applyStudySuggestions,
 	StudyDocumentError,
 	studyDocumentById,
@@ -30,6 +31,7 @@ import {
 	STUDY_ANSWER_MAX,
 } from "../../core/study-document.ts";
 import { emit } from "../../core/events.ts";
+import { noteReadGeneration } from "../../core/read-generation.ts";
 
 /**
  * The READ agent's document tools (read sessions, owner 2026-11-04; deeper
@@ -57,6 +59,25 @@ import { emit } from "../../core/events.ts";
 export interface DocumentToolContext {
 	chatId: string;
 	chatStore: ChatStore;
+}
+
+/** Parallel document tool calls are allowed, but writes are serialized per
+ *  session: read-modify-write must never see a half-applied sibling batch. */
+const documentQueues = new Map<string, Promise<unknown>>();
+function withDocumentLock<T>(chatId: string, work: () => Promise<T>): Promise<T> {
+	const previous = documentQueues.get(chatId) ?? Promise.resolve();
+	const run = previous.then(work, work);
+	const tail = run.then(() => undefined, () => undefined);
+	documentQueues.set(chatId, tail);
+	void tail.finally(() => {
+		if (documentQueues.get(chatId) === tail) documentQueues.delete(chatId);
+	});
+	return run;
+}
+
+function noteGeneration(ctx: DocumentToolContext, phase: string, activity: string): void {
+	const record = ctx.chatStore.getChat(ctx.chatId);
+	noteReadGeneration(ctx.chatId, record?.title ?? "Reading session", phase, activity);
 }
 
 const topicSuggestion = Type.Object({
@@ -122,7 +143,7 @@ const sectionPatch = Type.Object({
 		Type.Array(topicSuggestion, {
 			maxItems: STUDY_SUGGESTIONS_MAX,
 			description:
-				"This chapter's 2–4 deeper directions, shown immediately in the reading pane. Include them whenever you write or substantially revise the section; omit on small edits to keep the existing directions. An empty array clears them.",
+				"This chapter's 2–4 deeper directions, shown immediately in the reading pane. Include them whenever you write or substantially revise the section; omit on small edits to keep the existing directions. An empty array clears them. Roadmap-seeded chapters already carry all their subtopics — keep that list and use describe_subtopics for the overviews.",
 		}),
 	),
 	questions: Type.Optional(
@@ -221,6 +242,31 @@ export const suggestDeeperInput = Type.Object({
 	}),
 });
 
+export const describeSubtopicsInput = Type.Object({
+	documentId: Type.Optional(
+		Type.String({
+			description: "Target document id; omit for the document the learner is reading.",
+		}),
+	),
+	sectionId: Type.String({
+		description: "The main-topic section whose roadmap subtopics are being described.",
+	}),
+	subtopics: Type.Array(
+		Type.Object({
+			id: Type.String({ description: "An existing roadmap subtopic id in this section." }),
+			blurb: Type.String({
+				maxLength: STUDY_SUGGESTION_BLURB_MAX,
+				description: "One or two sentences: what this subtopic covers and why it matters. Keep it concrete.",
+			}),
+		}),
+		{
+			minItems: 1,
+			maxItems: 200,
+			description: "A batch of subtopic overviews. Parallel batches merge by id; titles and roadmap pointers stay untouched.",
+		},
+	),
+});
+
 export const listDocumentsInput = Type.Object({});
 
 /** The slim result shared by the editing tools. `changed` is the UI's
@@ -287,12 +333,12 @@ export function editDocumentTool(ctx: DocumentToolContext): AgentTool<typeof edi
 		name: EDIT_DOCUMENT_TOOL,
 		label: EDIT_DOCUMENT_TOOL,
 		description:
-			"Create or update one study document shown in the learner's reading pane. Omit documentId to edit the document the learner is reading (the root when none); pass documentId to edit a deeper document. Use `sections` to upsert by id (new sections need an id, heading, and body), `remove` to delete ids, `order` to set the full section order, `title` to name the document, and `related` to link related documents. Each section patch should also carry its 2–4 `suggestions` (deeper directions) and 1–3 `questions` (self-check question/answer pairs) whenever you write or substantially revise that section — the learner sees the directions immediately and the questions in a collapsed accordion. On a roadmap-seeded root, keep the existing roadmap subtopic suggestions instead of replacing them with invented directions. " +
+			"Create or update one study document shown in the learner's reading pane. Omit documentId to edit the document the learner is reading (the root when none); pass documentId to edit a deeper document. Use `sections` to upsert by id (new sections need an id, heading, and body), `remove` to delete ids, `order` to set the full section order, `title` to name the document, and `related` to link related documents. Each section patch should also carry its 2–4 `suggestions` (deeper directions) and 1–3 `questions` (self-check question/answer pairs) whenever you write or substantially revise that section — the learner sees the directions immediately and the questions in a collapsed accordion. On a roadmap-seeded root, keep the existing roadmap subtopic suggestions instead of replacing them with invented directions; use describe_subtopics for their generated overviews. " +
 			"The first root edit must set the title. Section ids are permanent: choose a lowercase slug once and reuse it for revisions. Only change what the learner asked for; keep the rest of the document stable. " +
 			"The result returns the target's current table of contents. Use read_document before a large rewrite or whenever the current text is not in your context, and list_documents to see the whole tree.",
 		parameters: editDocumentInput,
-		executionMode: "sequential",
-		execute: serverExecute(EDIT_DOCUMENT_TOOL, editDocumentInput, async (input) => {
+		executionMode: "parallel",
+		execute: serverExecute(EDIT_DOCUMENT_TOOL, editDocumentInput, (input) => withDocumentLock(ctx.chatId, async () => {
 			const record = ctx.chatStore.getChat(ctx.chatId);
 			if (!record) return { ok: false, error: `Chat not found: ${ctx.chatId}` } satisfies DocumentToolResult;
 			const { id, document } = resolveTarget(record, input.documentId);
@@ -305,6 +351,22 @@ export function editDocumentTool(ctx: DocumentToolContext): AgentTool<typeof edi
 			}
 			try {
 				const next = applyStudyDocumentEdit(document ?? undefined, input);
+				const patches = input.sections ?? [];
+				const names = patches
+					.map((patch) => next.sections.find((section) => section.id === patch.id)?.heading ?? patch.id)
+					.slice(0, 3)
+					.join(", ");
+				const questions = patches.some((patch) => patch.questions !== undefined);
+				const subtopics = patches.some((patch) => patch.suggestions !== undefined);
+				noteGeneration(
+					ctx,
+					questions ? "Generating questions" : subtopics ? "Generating subtopics" : "Writing the guide",
+					questions
+						? `Adding self-check questions${names ? ` · ${names}` : ""}`
+						: subtopics
+							? `Updating subtopics${names ? ` · ${names}` : ""}`
+							: `Writing summaries${names ? ` · ${names}` : ""}`,
+				);
 				ctx.chatStore.saveDocument(ctx.chatId, next);
 				// The pane's live update channel: a mid-turn write must reach
 				// the reading pane without touching the client's streaming
@@ -328,7 +390,7 @@ export function editDocumentTool(ctx: DocumentToolContext): AgentTool<typeof edi
 				}
 				throw err;
 			}
-		}),
+		})),
 	};
 }
 
@@ -339,7 +401,7 @@ export function readDocumentTool(ctx: DocumentToolContext): AgentTool<typeof rea
 		description:
 			"Read one study document — the title and ordered sections, including its deeper suggestions and related links. Omit documentId for the document the learner is reading. Optionally pass `sectionId` to read just one section. For the whole tree of documents, use list_documents.",
 		parameters: readDocumentInput,
-		executionMode: "sequential",
+		executionMode: "parallel",
 		execute: serverExecute(READ_DOCUMENT_TOOL, readDocumentInput, async ({ documentId, sectionId }) => {
 			const record = ctx.chatStore.getChat(ctx.chatId);
 			if (!record) return { ok: false, error: `Chat not found: ${ctx.chatId}` };
@@ -385,14 +447,16 @@ export function suggestDeeperTool(ctx: DocumentToolContext): AgentTool<typeof su
 		description:
 			"Store deeper-topic directions for one chapter of a study document. The learner pressed 'Go deeper' on that chapter; propose 2–4 directions that go one level deeper (a prerequisite, mechanism, consequence, comparison, or worked application), each with a short heading and one-line blurb. Do not write the child document here — the learner picks first. Point at an existing document when the topic is already written.",
 		parameters: suggestDeeperInput,
-		executionMode: "sequential",
-		execute: serverExecute("suggest_deeper", suggestDeeperInput, async (input) => {
+		executionMode: "parallel",
+		execute: serverExecute("suggest_deeper", suggestDeeperInput, (input) => withDocumentLock(ctx.chatId, async () => {
 			const record = ctx.chatStore.getChat(ctx.chatId);
 			if (!record) return { ok: false, error: `Chat not found: ${ctx.chatId}` };
 			const { id, document } = resolveTarget(record, input.documentId);
 			if (!document) return { ok: false, error: unknownDocument(id, record) };
 			const problems = suggestionTargetProblems(record, input.suggestions);
 			if (problems.length > 0) return { ok: false, error: problems.join("\n") };
+			const targetSection = document.sections.find((section) => section.id === input.sectionId);
+			noteGeneration(ctx, "Thinking of directions", `Directions · ${targetSection?.heading ?? input.sectionId}`);
 			try {
 				const next = applyStudySuggestions(document, input.sectionId, input.suggestions);
 				ctx.chatStore.saveDocument(ctx.chatId, next);
@@ -408,7 +472,44 @@ export function suggestDeeperTool(ctx: DocumentToolContext): AgentTool<typeof su
 				if (err instanceof StudyDocumentError) return { ok: false, error: err.message };
 				throw err;
 			}
-		}),
+		})),
+	};
+}
+
+export function describeSubtopicsTool(ctx: DocumentToolContext): AgentTool<typeof describeSubtopicsInput> {
+	return {
+		name: "describe_subtopics",
+		label: "describe_subtopics",
+		description:
+			"Write or update the one-line overviews of roadmap subtopics in one main-topic chapter. After a roadmap seed, every subtopic already exists as a suggestion; this tool fills in what each one covers and why it matters without changing its id, title or roadmap pointer. Call it in parallel batches when generating a whole roadmap.",
+		parameters: describeSubtopicsInput,
+		executionMode: "parallel",
+		execute: serverExecute("describe_subtopics", describeSubtopicsInput, (input) => withDocumentLock(ctx.chatId, async () => {
+			const record = ctx.chatStore.getChat(ctx.chatId);
+			if (!record) return { ok: false, error: `Chat not found: ${ctx.chatId}` };
+			const { id, document } = resolveTarget(record, input.documentId);
+			if (!document) return { ok: false, error: unknownDocument(id, record) };
+			const section = document.sections.find((candidate) => candidate.id === input.sectionId);
+			noteGeneration(
+				ctx,
+				"Generating subtopics",
+				`Subtopic overviews · ${section?.heading ?? input.sectionId} (${input.subtopics.length})`,
+			);
+			try {
+				const next = applyStudySubtopicBlurbs(document, input.sectionId, input.subtopics);
+				ctx.chatStore.saveDocument(ctx.chatId, next);
+				emit("document-changed", { chatId: ctx.chatId, documentId: next.id });
+				return {
+					ok: true,
+					documentId: next.id,
+					sectionId: input.sectionId,
+					described: input.subtopics.length,
+				};
+			} catch (err) {
+				if (err instanceof StudyDocumentError) return { ok: false, error: err.message };
+				throw err;
+			}
+		})),
 	};
 }
 
@@ -419,7 +520,7 @@ export function listDocumentsTool(ctx: DocumentToolContext): AgentTool<typeof li
 		description:
 			"The whole deeper-document tree for this reading session: every document's id, title, status, parent chapter, section ids and headings, existing suggestion ids, and related links. Use it before suggesting deeper directions or adding cross-links; call read_document for one document's prose.",
 		parameters: listDocumentsInput,
-		executionMode: "sequential",
+		executionMode: "parallel",
 		execute: serverExecute("list_documents", listDocumentsInput, async () => {
 			const record = ctx.chatStore.getChat(ctx.chatId);
 			if (!record) return { ok: false, error: `Chat not found: ${ctx.chatId}` };
@@ -444,6 +545,7 @@ export function documentTools(ctx: DocumentToolContext): Record<string, AgentToo
 		[EDIT_DOCUMENT_TOOL]: editDocumentTool(ctx),
 		[READ_DOCUMENT_TOOL]: readDocumentTool(ctx),
 		suggest_deeper: suggestDeeperTool(ctx),
+		describe_subtopics: describeSubtopicsTool(ctx),
 		list_documents: listDocumentsTool(ctx),
 	};
 }

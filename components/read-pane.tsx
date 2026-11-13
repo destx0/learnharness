@@ -110,6 +110,7 @@ export function ReadPane({
 	const [view, setView] = useState<"read" | "graph">("read");
 	const [suggestingKey, setSuggestingKey] = useState<string | null>(null);
 	const [generatingKey, setGeneratingKey] = useState<string | null>(null);
+	const [moreQuestionsKey, setMoreQuestionsKey] = useState<string | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
 	const [focusSectionId, setFocusSectionId] = useState<string | null>(null);
 	const activeIdRef = useRef(activeId);
@@ -158,12 +159,14 @@ export function ReadPane({
 		if (p.chatId !== chatId) return;
 		setSuggestingKey(null);
 		setGeneratingKey(null);
+		setMoreQuestionsKey(null);
 		scheduleRefresh();
 	});
 	useServerEvent("turn-settled", (p) => {
 		if (p.chatId !== chatId) return;
 		setSuggestingKey(null);
 		setGeneratingKey(null);
+		setMoreQuestionsKey(null);
 		void refresh();
 	});
 	useServerResync(() => {
@@ -262,6 +265,28 @@ export function ReadPane({
 		}
 	};
 
+	const moreQuestions = async (documentId: string, sectionId: string) => {
+		const key = `${documentId}:${sectionId}`;
+		if (moreQuestionsKey) return;
+		setMoreQuestionsKey(key);
+		setNotice(null);
+		try {
+			const res = await fetch(`/api/chats/${encodeURIComponent(chatId)}/document/questions`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ documentId, sectionId }),
+			});
+			if (!res.ok) {
+				const body = (await res.json().catch(() => ({}))) as { error?: string };
+				setNotice(body.error ?? "Could not generate more questions.");
+				setMoreQuestionsKey(null);
+			}
+		} catch {
+			setNotice("Could not reach the server.");
+			setMoreQuestionsKey(null);
+		}
+	};
+
 	const retryDocument = (doc: StudyDocument) => {
 		if (!doc.parent) return;
 		void goDeeper(doc.parent.documentId, doc.parent.sectionId, doc.parent.topicId);
@@ -295,12 +320,14 @@ export function ReadPane({
 			focusSectionId={focusSectionId}
 			initialScrollTop={scrollTops.current.get(active?.id ?? activeId) ?? 0}
 			suggestingKey={suggestingKey}
+			moreQuestionsKey={moreQuestionsKey}
 			notice={notice}
 			canGoDeeper={canGoDeeper}
 			onToggleTree={() => setTreeOpen((open) => !open)}
 			onOpenDocument={openDocument}
 			onSuggest={(documentId, sectionId) => void suggest(documentId, sectionId)}
 			onGoDeeper={(documentId, sectionId, topicId) => void goDeeper(documentId, sectionId, topicId)}
+			onMoreQuestions={(documentId, sectionId) => void moreQuestions(documentId, sectionId)}
 			onRetryDocument={retryDocument}
 			onRemoveRelated={(documentId, targetDocumentId, targetSectionId) => void removeRelated(documentId, targetDocumentId, targetSectionId)}
 			onOpenGraph={() => setView("graph")}
@@ -348,12 +375,14 @@ export interface ReadDocumentViewProps {
 	focusSectionId?: string | null;
 	initialScrollTop?: number;
 	suggestingKey?: string | null;
+	moreQuestionsKey?: string | null;
 	notice?: string | null;
 	canGoDeeper?: boolean;
 	onToggleTree?: () => void;
 	onOpenDocument?: (documentId: string, sectionId?: string) => void;
 	onSuggest?: (documentId: string, sectionId: string) => void;
 	onGoDeeper?: (documentId: string, sectionId: string, topicId: string) => void;
+	onMoreQuestions?: (documentId: string, sectionId: string) => void;
 	onRetryDocument?: (doc: StudyDocument) => void;
 	onRemoveRelated?: (documentId: string, targetDocumentId: string, targetSectionId?: string) => void;
 	onOpenGraph?: () => void;
@@ -374,12 +403,14 @@ export function ReadDocumentView({
 	focusSectionId = null,
 	initialScrollTop = 0,
 	suggestingKey = null,
+	moreQuestionsKey = null,
 	notice = null,
 	canGoDeeper = true,
 	onToggleTree = () => {},
 	onOpenDocument = () => {},
 	onSuggest = () => {},
 	onGoDeeper = () => {},
+	onMoreQuestions = () => {},
 	onRetryDocument = () => {},
 	onRemoveRelated = () => {},
 	onOpenGraph = () => {},
@@ -553,12 +584,14 @@ export function ReadDocumentView({
 							record={record}
 							notice={notice}
 							suggestingKey={suggestingKey}
+							moreQuestionsKey={moreQuestionsKey}
 							canGoDeeper={canGoDeeper}
 							focusSectionId={focusSectionId}
 							initialScrollTop={initialScrollTop}
 							onOpenDocument={onOpenDocument}
 							onSuggest={onSuggest}
 							onGoDeeper={onGoDeeper}
+							onMoreQuestions={onMoreQuestions}
 							onRemoveRelated={onRemoveRelated}
 							onScroll={onScroll}
 						/>
@@ -782,12 +815,14 @@ function ReadArticle({
 	record,
 	notice,
 	suggestingKey,
+	moreQuestionsKey,
 	canGoDeeper,
 	focusSectionId,
 	initialScrollTop,
 	onOpenDocument,
 	onSuggest,
 	onGoDeeper,
+	onMoreQuestions,
 	onRemoveRelated,
 	onScroll,
 }: {
@@ -796,12 +831,14 @@ function ReadArticle({
 	record: { document?: StudyDocument; documents: StudyDocument[] };
 	notice: string | null;
 	suggestingKey: string | null;
+	moreQuestionsKey: string | null;
 	canGoDeeper: boolean;
 	focusSectionId: string | null;
 	initialScrollTop: number;
 	onOpenDocument: (documentId: string, sectionId?: string) => void;
 	onSuggest: (documentId: string, sectionId: string) => void;
 	onGoDeeper: (documentId: string, sectionId: string, topicId: string) => void;
+	onMoreQuestions: (documentId: string, sectionId: string) => void;
 	onRemoveRelated: (documentId: string, targetDocumentId: string, targetSectionId?: string) => void;
 	onScroll: (documentId: string, top: number) => void;
 }) {
@@ -920,7 +957,12 @@ function ReadArticle({
 								<MessageResponse>{section.body}</MessageResponse>
 							</SessionMermaidContext.Provider>
 						</div>
-						<SelfCheck questions={section.questions ?? []} />
+						<SelfCheck
+							questions={section.questions ?? []}
+							generating={moreQuestionsKey === `${document.id}:${section.id}`}
+							disabled={moreQuestionsKey !== null}
+							onMoreQuestions={() => onMoreQuestions(document.id, section.id)}
+						/>
 						<SectionDirections
 							document={document}
 							sectionId={section.id}
@@ -974,7 +1016,17 @@ function ReadArticle({
 	);
 }
 
-function SelfCheck({ questions }: { questions: readonly StudySectionQuestion[] }) {
+function SelfCheck({
+	questions,
+	generating = false,
+	disabled = false,
+	onMoreQuestions,
+}: {
+	questions: readonly StudySectionQuestion[];
+	generating?: boolean;
+	disabled?: boolean;
+	onMoreQuestions?: () => void;
+}) {
 	if (questions.length === 0) return null;
 	return (
 		// Native details: collapsed by default, keyboard-accessible, no state.
@@ -1002,6 +1054,15 @@ function SelfCheck({ questions }: { questions: readonly StudySectionQuestion[] }
 						</div>
 					</details>
 				))}
+				<button
+					type="button"
+					onClick={onMoreQuestions}
+					disabled={generating || disabled}
+					className="mt-1 flex cursor-pointer items-center gap-1.5 rounded-md border border-dashed border-border/70 px-2.5 py-1.5 font-ui text-[10px] uppercase tracking-widest text-muted-foreground/70 transition-colors hover:border-border hover:bg-accent/30 hover:text-foreground disabled:cursor-default disabled:opacity-60"
+				>
+					{generating ? <BrailleSpinner label="Generating more questions" /> : <SparklesIcon className="size-3" aria-hidden="true" />}
+					{generating ? "Generating more questions…" : "Generate more questions"}
+				</button>
 			</div>
 		</details>
 	);

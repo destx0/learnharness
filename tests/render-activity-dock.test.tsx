@@ -84,6 +84,30 @@ describe("activity dock pure layer", () => {
 		assert.ok(blobs.every((b) => b.chatId === "src_a"), "abort/link identity stays source-scoped");
 	});
 
+	it("shows a read roadmap generation row with its current activity and no abort control", () => {
+		const feed: ActivityFeed = {
+			jobs: [],
+			extractions: [],
+			readGenerations: [{
+				id: "read:chat_read",
+				chatId: "chat_read",
+				title: "Angular",
+				phase: "Generating subtopics",
+				activity: "Subtopic overviews · Components (12)",
+				startedAt: NOW - 20_000,
+				updatedAt: NOW,
+			}],
+		};
+		const blob = toBlobs(feed)[0]!;
+		assert.equal(blob.process, "read");
+		assert.equal(blob.activity, "Subtopic overviews · Components (12)");
+		const html = renderToStaticMarkup(<ActivitySection feed={feed} />);
+		assert.match(html, /data-testid="activity-blob-read"/);
+		assert.match(html, /Angular/);
+		assert.match(html, /Subtopic overviews · Components \(12\)/);
+		assert.doesNotMatch(html, /data-testid="activity-abort"/);
+	});
+
 	it("uses the server's Pi price projection; absent pricing is null, never zero", () => {
 		const priced = job({
 			usage: {

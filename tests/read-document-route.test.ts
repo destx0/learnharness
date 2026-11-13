@@ -18,6 +18,7 @@ const { GET } = await import("../app/api/chats/[id]/document/route.ts");
 const { POST: setActive } = await import("../app/api/chats/[id]/document/active/route.ts");
 const { POST: suggest } = await import("../app/api/chats/[id]/document/suggest/route.ts");
 const { POST: deeper } = await import("../app/api/chats/[id]/document/deeper/route.ts");
+const { POST: moreQuestions } = await import("../app/api/chats/[id]/document/questions/route.ts");
 
 after(() => {
 	fs.rmSync(TMP_DATA, { recursive: true, force: true });
@@ -131,6 +132,11 @@ describe("GET /api/chats/[id]/document", () => {
 			body: JSON.stringify({ documentId: "root", sectionId: "maps", topicId: "nope" }),
 		}), { params: Promise.resolve({ id: chat.id }) });
 		assert.equal(badDeeper.status, 400);
+		const badQuestions = await moreQuestions(new Request("http://localhost", {
+			method: "POST",
+			body: JSON.stringify({ documentId: "root", sectionId: "nope" }),
+		}), { params: Promise.resolve({ id: chat.id }) });
+		assert.equal(badQuestions.status, 400);
 	});
 
 	it("404s for an unknown session", async () => {

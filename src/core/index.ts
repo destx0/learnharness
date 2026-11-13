@@ -61,6 +61,7 @@ export * from "./tool-parts.ts";
 // validation/patch engine. Browser-safe — the read pane and the tool both
 // consume it.
 export * from "./study-document.ts";
+export * from "./read-generation.ts";
 export * from "./answer-presentation.ts";
 export * from "./prices.ts";
 export * from "./context-usage.ts";

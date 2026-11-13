@@ -48,7 +48,7 @@ export const STUDY_DEPTH_MAX = 6;
 export const STUDY_SUGGESTIONS_MAX = 12;
 export const STUDY_SUGGESTION_HEADING_MAX = 160;
 export const STUDY_SUGGESTION_BLURB_MAX = 240;
-export const STUDY_QUESTIONS_MAX = 6;
+export const STUDY_QUESTIONS_MAX = 20;
 export const STUDY_QUESTION_MAX = 300;
 export const STUDY_ANSWER_MAX = 4000;
 export const STUDY_RELATED_MAX = 12;
@@ -557,7 +557,7 @@ function validateSuggestions(
 		let roadmap: StudyRoadmapRef | undefined;
 		if (suggestion.roadmap !== undefined) {
 			const ref = suggestion.roadmap;
-			if (!ref || typeof ref !== "object" || typeof ref.slug !== "string" || !ref.slug || typeof ref.nodeId !== "string" || !ref.nodeId || (ref.kind !== "track" && ref.kind !== "topic")) {
+			if (!ref || typeof ref !== "object" || typeof ref.slug !== "string" || !ref.slug || typeof ref.nodeId !== "string" || !ref.nodeId || (ref.kind !== "track" && ref.kind !== "topic" && ref.kind !== "subtopic")) {
 				problems.push(`${label}: invalid roadmap reference`);
 			} else {
 				roadmap = { slug: ref.slug, nodeId: ref.nodeId, kind: ref.kind };
@@ -613,6 +613,65 @@ function validateQuestions(
 		if (question && answer) out.push({ id: entry.id, question, answer });
 	}
 	return out;
+}
+
+/** One generated subtopic overview patch. The roadmap title/ref stays. */
+export interface StudySubtopicBlurb {
+	id: string;
+	blurb: string;
+}
+
+/** Write the generated one-line overview of roadmap subtopics without
+ *  touching their titles, ids or roadmap pointers. Batches merge by id, so
+ *  parallel generation calls are safe. Pure; bumps the revision. */
+export function applyStudySubtopicBlurbs(
+	current: StudyDocument,
+	sectionId: string,
+	blurbs: readonly StudySubtopicBlurb[],
+	now = new Date(),
+): StudyDocument {
+	const problems: string[] = [];
+	const section = current.sections.find((s) => s.id === sectionId);
+	if (!section) {
+		const ids = current.sections.map((s) => s.id).join(", ") || "(none)";
+		throw new StudyDocumentError([`subtopics: no section with id "${sectionId}". Current ids: ${ids}`]);
+	}
+	if (blurbs.length === 0) problems.push("subtopics: at least one overview is required");
+	const known = new Set((section.suggestions ?? []).map((suggestion) => suggestion.id));
+	const next = new Map<string, string>();
+	for (const [i, entry] of blurbs.entries()) {
+		const label = `subtopics[${i}]`;
+		if (!entry || typeof entry !== "object") {
+			problems.push(`${label}: must be an object`);
+			continue;
+		}
+		if (typeof entry.id !== "string" || !known.has(entry.id)) {
+			problems.push(`${label}: no roadmap subtopic with id "${String(entry.id)}" in "${sectionId}"`);
+			continue;
+		}
+		if (next.has(entry.id)) {
+			problems.push(`${label}: "${entry.id}" appears more than once`);
+			continue;
+		}
+		const value = typeof entry.blurb === "string" ? entry.blurb.trim() : "";
+		if (!value) problems.push(`${label}: blurb must not be empty`);
+		else if (value.length > STUDY_SUGGESTION_BLURB_MAX) problems.push(`${label}: blurb is longer than ${STUDY_SUGGESTION_BLURB_MAX} characters`);
+		else next.set(entry.id, value);
+	}
+	if (problems.length > 0) throw new StudyDocumentError(problems);
+	return {
+		...current,
+		sections: current.sections.map((s) => s.id === sectionId
+			? {
+				...s,
+				suggestions: (s.suggestions ?? []).map((suggestion) =>
+					next.has(suggestion.id) ? { ...suggestion, blurb: next.get(suggestion.id)! } : suggestion,
+				),
+			}
+			: s),
+		revision: current.revision + 1,
+		updatedAt: now.toISOString(),
+	};
 }
 
 /** Replace one chapter's deeper directions. Pure; bumps the revision. */

@@ -27,6 +27,7 @@ import { listJobs } from "./jobs.ts";
 import { jobCost } from "./pricing.ts";
 import { pluginWorkerActivities, type PluginWorkerActivity } from "./plugin-worker-activity.ts";
 import type { JobRecord } from "../core/contracts.ts";
+import { readGenerationActivities, type ReadGenerationActivity } from "../core/read-generation.ts";
 
 export { abortExtraction, extractionStatuses, type ExtractionPhase, type RunningExtraction } from "../agent/subagents/extraction.ts";
 export { chatStore } from "../store/chats.ts";
@@ -77,6 +78,7 @@ export function activityFeed(): {
 	jobs: ActivityJob[];
 	pluginWorkers: ActivityPluginWorker[];
 	extractions: ActivityExtraction[];
+	readGenerations: ReadGenerationActivity[];
 	graphRevision: number;
 } {
 	const chats = chatStore.listChats();
@@ -123,6 +125,7 @@ export function activityFeed(): {
 		jobs,
 		pluginWorkers,
 		extractions: extractions.sort((a, b) => a.startedAt - b.startedAt),
+		readGenerations: readGenerationActivities(),
 		graphRevision: graphRevision(),
 	};
 }

@@ -130,7 +130,7 @@ export function roadmapRootSeed(roadmap: RoadmapDataset, now = new Date()): Stud
 			heading: "Overview",
 			body: [
 				`This reading path is built from the [${roadmap.title} roadmap](${roadmap.source}) on roadmap.sh.`,
-				"The six tracks below follow its topics. Open a track to see the topics inside it, then open a topic to read the roadmap's subtopics in depth.",
+				`The ${roadmap.tracks.length} tracks below follow its topics. Open a track to see the topics inside it, then open a topic to read the roadmap's subtopics in depth.`,
 				"The guide is living: ask in the conversation to expand, simplify, or redirect anything.",
 			].join("\n\n"),
 			suggestions: roadmap.tracks.map((track) => trackSuggestion(roadmap, track)),

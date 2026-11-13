@@ -17,6 +17,7 @@ import { ChainTableOverlay } from "@/components/chain-table.tsx";
 import { ComposerActions, NodePickerControl } from "@/components/composer-actions";
 import { OPENING_PROMPT_FAILURE } from "@/components/opening-prompt";
 import { SessionStarter } from "@/components/start-session";
+import { RoadmapQuickStart } from "@/components/roadmap-quick-start";
 import type { ChatSettings, GraphSnapshot } from "@/src/core";
 
 /** The draft's pick set (owner round 10): the SAME shape the home pick
@@ -87,6 +88,7 @@ export function DraftShell({
 	onOpenPicker,
 	onClearPicks,
 	overlay,
+	quickStart,
 }: {
 	busy: boolean;
 	text: string;
@@ -114,6 +116,8 @@ export function DraftShell({
 	 *  the graph view (the overlay fills its column, never the sidebar).
 	 *  Passed as a node so the pick state stays in NewSession. */
 	overlay?: ReactNode;
+	/** Read draft's roadmap.sh quick-start grid (rendered above the composer). */
+	quickStart?: ReactNode;
 }) {
 	const controller = useOptionalInteractionLayers();
 	const pathname = usePathname();
@@ -193,10 +197,20 @@ export function DraftShell({
 										mode === "practice"
 											? "Pick nodes from your knowledge graph, describe what you want to practice, or bring your own problem."
 											: mode === "read"
-												? "The agent will write a living study document you can read and steer."
+												? "Pick a roadmap below, or describe what you want to read about. The agent will write a living study document you can read and steer."
 												: "The teacher will open by probing what you already know."
 									}
-								/>
+								>
+									{quickStart ? (
+										<>
+											<div className="space-y-1">
+												<h3 className="font-medium text-sm">New reading session</h3>
+												<p className="text-muted-foreground text-sm">Pick a roadmap below, or describe what you want to read about. The agent will write a living study document you can read and steer.</p>
+											</div>
+											{quickStart}
+										</>
+									) : undefined}
+								</ConversationEmptyState>
 							</ConversationContent>
 						</Conversation>
 						<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
@@ -358,6 +372,7 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 				onChange={applyText}
 				onSend={send}
 				mode={mode}
+				quickStart={mode === "read" ? <RoadmapQuickStart /> : undefined}
 				picks={picks}
 				onOpenPicker={openPicker}
 				onClearPicks={() => applyPicks([])}

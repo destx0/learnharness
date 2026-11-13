@@ -265,6 +265,15 @@ function saveReadingDocumentId(id: string, documentId: string): void {
 	writeChat(record);
 }
 
+/** Quick-start identity for a read session: which imported roadmap it came
+ *  from. Like readingDocumentId, view state, not activity. */
+function saveRoadmapSlug(id: string, roadmapSlug: string): void {
+	const record = getChat(id);
+	if (!record) throw new Error(`Chat not found: ${id}`);
+	record.roadmapSlug = roadmapSlug;
+	writeChat(record);
+}
+
 /** Side-question threads (2026-11-02): one synchronous read-modify-write,
  *  so a concurrent turn's saveMessages (which re-reads the record) never
  *  loses a thread and a thread write never loses messages. Null when the
@@ -289,6 +298,7 @@ export const chatStore: ChatStore = {
 	saveTree,
 	saveDocument,
 	saveReadingDocumentId,
+	saveRoadmapSlug,
 	saveSettings,
 	renameChat,
 	deleteChat,

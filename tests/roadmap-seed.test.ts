@@ -15,6 +15,12 @@ import { after, describe, it } from "node:test";
 const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "lh-roadmap-"));
 process.env.LH_DATA_DIR = TMP_DATA;
 fs.mkdirSync(path.join(TMP_DATA, "roadmaps"), { recursive: true });
+fs.writeFileSync(path.join(TMP_DATA, "roadmaps", "catalog.json"), JSON.stringify({
+	source: "https://roadmap.sh/roadmaps",
+	importedAt: "2026-11-13T00:00:00.000Z",
+	categories: [],
+	roadmaps: [{ slug: "angular", title: "Angular", type: "skill", category: "Frameworks", subcategory: "Frameworks" }],
+}));
 fs.writeFileSync(path.join(TMP_DATA, "roadmaps", "angular.json"), JSON.stringify({
 	slug: "angular",
 	title: "Angular",
@@ -55,6 +61,7 @@ describe("roadmap presets", () => {
 		assert.equal(record?.document?.sections[1]?.suggestions?.[0]?.roadmap?.nodeId, "subtopic:introduction:architecture");
 		assert.equal(record?.document?.roadmap?.tracks[0]?.title, "Foundations");
 		assert.equal(record?.readingDocumentId, "root");
+		assert.equal(record?.roadmapSlug, "angular");
 		// Never overwrite an existing document; never seed a teach session.
 		assert.equal(seedRoadmapForChat(chatStore, chat.id, "Angular"), false);
 		const teach = chatStore.createChat("Angular");
@@ -65,13 +72,29 @@ describe("roadmap presets", () => {
 		const { POST } = await import("../app/api/chats/route.ts");
 		const response = await POST(new Request("http://localhost/api/chats", {
 			method: "POST",
-			body: JSON.stringify({ title: "Angular", kind: "read" }),
+			body: JSON.stringify({ title: "Angular", kind: "read", roadmapSlug: "angular" }),
 		}));
 		const body = (await response.json()) as { id: string };
 		const record = chatStore.getChat(body.id);
 		assert.equal(record?.kind, "read");
 		assert.equal(record?.document?.title, "Angular");
 		assert.equal(record?.document?.sections[1]?.suggestions?.[0]?.roadmap?.nodeId, "subtopic:introduction:architecture");
+		assert.equal(record?.roadmapSlug, "angular");
+	});
+
+	it("serves the catalog with preset and existing-session badges", async () => {
+		const { GET } = await import("../app/api/roadmaps/route.ts");
+		const chat = chatStore.createChat("Angular", "read");
+		seedRoadmapForChat(chatStore, chat.id, chat.title, "angular");
+		const res = await GET();
+		const body = (await res.json()) as {
+			roadmaps?: Array<{ slug: string; preset?: boolean; existingChatId?: string | null }>;
+			missing?: boolean;
+		};
+		assert.equal(body.missing, undefined);
+		const angular = body.roadmaps?.find((item) => item.slug === "angular");
+		assert.equal(angular?.preset, true);
+		assert.ok(angular?.existingChatId);
 	});
 
 	it("seeds legacy track/topic children and a subtopic deep dive", () => {

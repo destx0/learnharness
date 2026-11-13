@@ -20,8 +20,9 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-	const body = (await req.json().catch(() => ({}))) as { title?: unknown; kind?: unknown; graphContext?: unknown };
+	const body = (await req.json().catch(() => ({}))) as { title?: unknown; kind?: unknown; graphContext?: unknown; roadmapSlug?: unknown };
 	const title = typeof body.title === "string" ? body.title : "";
+	const roadmapSlug = typeof body.roadmapSlug === "string" && /^[a-z0-9-]+$/.test(body.roadmapSlug) ? body.roadmapSlug : undefined;
 	// Practice sessions (owner, 2026-10-04) and read sessions (2026-11-04):
 	// the kind marks the record — each builds its own agent from turn 1.
 	// "teach" stays ABSENT (absence reads as teach, no migration).
@@ -36,7 +37,7 @@ export async function POST(req: Request) {
 	// starts with the root graph already seeded: tracks as suggestions,
 	// then topics/subtopics as the learner drills in. Missing/!imported
 	// presets leave the ordinary agent-written opening untouched.
-	if (kind === "read") seedRoadmapForChat(stores.chatStore, chat.id, chat.title);
+	if (kind === "read") seedRoadmapForChat(stores.chatStore, chat.id, chat.title, roadmapSlug);
 	// PER-SESSION MODELS (owner, 2026-09-28): a session owns its model +
 	// thinking level from birth — stamped verbatim from the STRONG slot,
 	// the new-session default. From here the strong slot never reaches

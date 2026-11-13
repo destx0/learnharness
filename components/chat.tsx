@@ -66,9 +66,10 @@ import {
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanMarginalia, planExists } from "@/components/plan-window";
 import { ReadPane, documentWriteInFlight } from "@/components/read-pane";
+import { RoadmapBrowser } from "@/components/roadmap-quick-start";
 import { MermaidOverlay, SessionMermaidContext, type SessionImage } from "@/components/session-overlay";
 import { AbortTurnDialog, type AbortMode } from "@/components/abort-turn-dialog";
-import { ArrowRightIcon, BookOpenIcon, DumbbellIcon, MessageCircleIcon, MessageCircleQuestionIcon, WaypointsIcon, XIcon } from "lucide-react";
+import { ArrowRightIcon, BookOpenIcon, DumbbellIcon, MapIcon, MessageCircleIcon, MessageCircleQuestionIcon, WaypointsIcon, XIcon } from "lucide-react";
 import type { PlanBlockData } from "@/src/core";
 import { QuestionDock } from "@/components/question-dock";
 import { PluginQuestionDock } from "./plugin-question-dock";
@@ -1255,6 +1256,7 @@ export function Chat({
 	 * part, not the turn's busy flag: the agent may be answering a chat
 	 * question without touching the document. */
 	const [readChatOpen, setReadChatOpen] = useState(false);
+	const [roadmapsOpen, setRoadmapsOpen] = useState(false);
 	const writingDocument = useMemo(
 		() => kind === "read" && documentWriteInFlight(messages),
 		[kind, messages],
@@ -1759,6 +1761,25 @@ export function Chat({
 							>
 								<MessageCircleIcon className="size-3.5" aria-hidden />
 								Chat
+							</button>
+						</Hint>
+					)}
+					{/* Roadmap quick start (2026-11-13): jump between roadmap.sh
+					    roadmaps from any read session. The browser opens the
+					    seeded read session, or starts one. */}
+					{kind === "read" && (
+						<Hint label="Open another roadmap" side="bottom">
+							<button
+								type="button"
+								data-testid="roadmaps-chip"
+								onClick={(e) => {
+									blurAfterPointerClick(e);
+									setRoadmapsOpen(true);
+								}}
+								className="lh-no-drag flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border/80 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+							>
+								<MapIcon className="size-3.5" aria-hidden />
+								Roadmaps
 							</button>
 						</Hint>
 					)}
@@ -2326,6 +2347,9 @@ export function Chat({
 				)}
 				</SurfaceRegion>
 				<AbortTurnDialog mode={abortAsk} onClose={closeAbortAsk} onConfirm={confirmAbort} busy={busy} />
+				{kind === "read" && roadmapsOpen && (
+					<RoadmapBrowser open onClose={() => setRoadmapsOpen(false)} />
+				)}
 				</div>
 			</div>
 

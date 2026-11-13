@@ -173,6 +173,7 @@ export interface ChatRecord {
     document?: StudyDocument;
     documents?: StudyDocument[];
     readingDocumentId?: string;
+    roadmapSlug?: string;
     turns?: TurnUsage[];
     extractions?: ExtractionRunUsage[];
     settings?: ChatSettings;
@@ -196,6 +197,7 @@ export interface ChatRecord {
 - [document](#chatrecord-document)
 - [documents](#chatrecord-documents)
 - [readingDocumentId](#chatrecord-readingdocumentid)
+- [roadmapSlug](#chatrecord-roadmapslug)
 - [turns](#chatrecord-turns)
 - [extractions](#chatrecord-extractions)
 - [settings](#chatrecord-settings)
@@ -283,6 +285,15 @@ steers this document; absent reads as the root.
 
 ```ts
 readingDocumentId?: string;
+```
+
+### ChatRecord roadmapSlug
+
+Imported roadmap preset this read session started from (quick
+start/jump identity; absent on ordinary read sessions).
+
+```ts
+roadmapSlug?: string;
 ```
 
 ### ChatRecord turns
@@ -413,6 +424,7 @@ export interface ChatSummary {
     pendingQuestion: boolean;
     pendingProblem: boolean;
     settings?: ChatSettings;
+    roadmapSlug?: string;
 }
 ```
 
@@ -430,6 +442,7 @@ export interface ChatSummary {
 - [pendingQuestion](#chatsummary-pendingquestion)
 - [pendingProblem](#chatsummary-pendingproblem)
 - [settings](#chatsummary-settings)
+- [roadmapSlug](#chatsummary-roadmapslug)
 
 ### ChatSummary id
 
@@ -500,6 +513,14 @@ Saved per-session model/thinking choices included in the list payload.
 
 ```ts
 settings?: ChatSettings;
+```
+
+### ChatSummary roadmapSlug
+
+Imported roadmap preset this read session started from.
+
+```ts
+roadmapSlug?: string;
 ```
 
 ## ExtractionRunUsage

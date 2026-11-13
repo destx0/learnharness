@@ -158,6 +158,9 @@ export interface ChatRecord {
 	/** The document the learner is currently reading. The floating chat
 	 *  steers this document; absent reads as the root. */
 	readingDocumentId?: string;
+	/** Imported roadmap preset this read session started from (quick
+	 *  start/jump identity; absent on ordinary read sessions). */
+	roadmapSlug?: string;
 	/** Append-only usage log, separate from message history: one entry per billed
 	 * turn, deduplicated by request identity. messageId associates usage with the
 	 * transcript; token/cost aggregates are computed from the log at read time. */
@@ -181,7 +184,7 @@ export interface ChatRecord {
 /** The chat record format this build writes and understands. Version 3
  *  adds the deeper-document tree (`documents` / `readingDocumentId`) and
  *  document suggestion/related state. */
-export const CURRENT_CHAT_VERSION = 3;
+export const CURRENT_CHAT_VERSION = 4;
 
 /** Per-session model and thinking choices for native conversation agents.
  * Each absent field falls back independently to the strong model slot; no
@@ -437,6 +440,8 @@ export interface ChatSummary {
 	pendingProblem: boolean;
 	/** Saved per-session model/thinking choices included in the list payload. */
 	settings?: ChatSettings;
+	/** Imported roadmap preset this read session started from. */
+	roadmapSlug?: string;
 }
 
 /** Session-list row combining a saved summary with live server state.

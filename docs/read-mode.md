@@ -279,14 +279,35 @@ instead of a blank guide. Angular is the first preset, built from the
 ### Import
 
 ```bash
-npm run roadmap:import -- angular
+npm run roadmap:catalog
+npm run roadmap:import -- all      # or: npm run roadmap:import -- angular
 ```
 
-`scripts/import-roadmap.mjs` fetches roadmap.sh's official graph
-(`/api/v1-official-roadmap/<slug>`), imposes the read-mode tree, and writes
-`data/roadmaps/<slug>.json` under the mutable data dir (gitignored). Only
-labels and hierarchy are stored — never roadmap.sh prose. The Angular
-preset has 6 tracks, 26 main topics and 132 subtopics.
+`scripts/import-roadmap-catalog.mjs` fetches roadmap.sh's roadmap catalog
+(102 roadmaps) into `data/roadmaps/catalog.json`. `scripts/import-roadmap.mjs`
+fetches each official graph (`/api/v1-official-roadmap/<slug>`), imposes the
+read-mode tree, and writes `data/roadmaps/<slug>.json` under the mutable
+data dir (gitignored). `all` imports every catalog roadmap; the Angular
+preset uses a curated 6-track mapping (26 topics, 132 subtopics), every
+other roadmap uses the visual group/nearest-topic fallback (one track,
+topics in visual order). Only labels and hierarchy are stored — never
+roadmap.sh prose.
+
+### Quick start and jump
+
+The read draft shows a **Start from a roadmap** grid: suggested roadmaps
+(Angular, React, Node.js, Python, DevOps, System Design, …), with existing
+read sessions first. **Browse all** opens the full searchable catalog
+grouped by roadmap.sh categories. A **Roadmaps** chip in a read session's
+top bar opens the same browser, so the learner can jump to another roadmap
+without going back to the draft.
+
+Each catalog card is **Open** when a read session for that roadmap already
+exists (newest first), otherwise **Start**. Starting creates a read session
+with the roadmap's title, seeds its graph (when a preset is imported), and
+hands the opening prompt to the chat page. The session record carries
+`roadmapSlug`, the quick-start identity used for the existing-session badge
+and jump.
 
 ### The seeded opening
 
@@ -347,7 +368,8 @@ subtopic as a ghost row.
 ### Tests
 
 - `tests/roadmap-seed.test.ts` — title match, the all-main-topic root
-  seed, track/topic/subtopic seeds, no-overwrite rule, route integration.
+  seed, track/topic/subtopic seeds, no-overwrite rule, catalog API badges,
+  route integration.
 - `tests/read-roadmap-graph.test.ts` — spine/side-box layout, alternating
   branches, generated status, roadmap detection.
 

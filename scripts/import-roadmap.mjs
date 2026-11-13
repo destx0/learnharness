@@ -1,18 +1,20 @@
 #!/usr/bin/env node
 /**
- * Import a roadmap.sh roadmap into a local read-mode preset.
+ * Import roadmap.sh roadmaps into local read-mode presets.
  *
- *   node scripts/import-roadmap.mjs angular
+ *   node scripts/import-roadmap.mjs angular   # one roadmap
+ *   node scripts/import-roadmap.mjs all       # every catalog roadmap
  *
  * roadmap.sh exposes the official roadmap graph at
  * /api/v1-official-roadmap/<slug> (the same data its page renders). The
- * graph is visual, not a tree: this script imposes the read-mode tree —
- * six tracks for the root, the roadmap topics inside each track, and the
- * roadmap subtopics inside each topic. Only labels and hierarchy are
- * stored; the guide prose is written by the read agent.
+ * graph is visual, not a tree: this script imposes the read-mode tree. The
+ * Angular roadmap has a curated track/subtopic mapping; every other roadmap
+ * uses the visual group boxes + nearest-topic fallback. Only labels and
+ * hierarchy are stored; the guide prose is written by the read agent.
  *
- * The output lives under the mutable data dir (data/roadmaps/, gitignored),
- * never in the source tree. Re-run to refresh from roadmap.sh.
+ * `all` reads data/roadmaps/catalog.json (run
+ * scripts/import-roadmap-catalog.mjs first). The output lives under the
+ * mutable data dir (data/roadmaps/, gitignored), never in the source tree.
  */
 
 import fs from "node:fs";
@@ -20,20 +22,25 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const slug = (process.argv[2] || "angular").toLowerCase();
-if (slug !== "angular") throw new Error("Only the Angular roadmap is mapped so far.");
+const requested = (process.argv[2] || "angular").toLowerCase();
+const dataDir = process.env.LH_DATA_DIR ? path.resolve(process.env.LH_DATA_DIR) : path.join(ROOT, "data");
+const catalogFile = path.join(dataDir, "roadmaps", "catalog.json");
 
-const response = await fetch(`https://roadmap.sh/api/v1-official-roadmap/${slug}`);
-if (!response.ok) throw new Error(`roadmap.sh returned ${response.status}`);
-const roadmap = await response.json();
-const nodes = Array.isArray(roadmap.nodes) ? roadmap.nodes : [];
+function readCatalog() {
+	try {
+		const catalog = JSON.parse(fs.readFileSync(catalogFile, "utf-8"));
+		if (!Array.isArray(catalog.roadmaps)) throw new Error("no roadmaps array");
+		return catalog;
+	} catch (err) {
+		throw new Error(`Cannot read ${catalogFile}: ${err instanceof Error ? err.message : err}. Run: npm run roadmap:catalog`);
+	}
+}
 
-const topics = nodes.filter((node) => node.type === "topic" && node.data?.label);
-const subtopics = nodes.filter((node) => node.type === "subtopic" && node.data?.label);
-const sections = nodes.filter((node) => node.type === "section");
+const slugify = (value) => value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "topic";
+const distance = (a, b) => Math.hypot((a.position?.x ?? 0) - (b.position?.x ?? 0), (a.position?.y ?? 0) - (b.position?.y ?? 0));
 
-/** The ten visual section boxes map to these roadmap topics. */
-const SECTION_TOPIC = {
+/** Curated Angular mapping (2026-11-12). */
+const ANGULAR_SECTION_TOPIC = {
 	"VBjI-LQstODfimbRlHUFi": "Components",
 	"HLnq8xMeb0NwnkVUtcFMj": "Communication",
 	"t6zZwKzPHXT57Uqj4R2aI": "Understand Binding",
@@ -45,10 +52,7 @@ const SECTION_TOPIC = {
 	"rikJUpXHGXAEC74Szwj7s": "Security",
 	"dnM44vvHZW3dSpsVi546w": "SSG",
 };
-
-/** Box assignment plus nearest-topic is mostly right; these labels sit
- *  across a visual gap and need the human correction. */
-const MOVES = {
+const ANGULAR_MOVES = {
 	"Component Anatomy": "Components",
 	"Creating Components": "Components",
 	"Metadata": "Components",
@@ -72,9 +76,7 @@ const MOVES = {
 	"@Input & @Output": "Communication",
 	"Template Ref Vars": "Templates",
 };
-
-/** Six root tracks; each stays within the six-suggestion cap. */
-const TRACKS = [
+const ANGULAR_TRACKS = [
 	{ id: "foundations", title: "Foundations", topics: ["Introduction to Angular", "Components", "Communication", "Understand Binding"] },
 	{ id: "templates-ui", title: "Templates & UI", topics: ["Templates", "Template Syntax", "Pipes", "Directives"] },
 	{ id: "architecture-data", title: "Architecture & Data", topics: ["Modules", "Routing", "Services  & Remote Data", "Forms", "HTTP Client"] },
@@ -83,79 +85,149 @@ const TRACKS = [
 	{ id: "quality-security", title: "Quality & Security", topics: ["Security", "Accessibility", "Performance", "Testing", "Internationalization", "Animation"] },
 ];
 
-const slugify = (value) => value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "topic";
-const inside = (node, section) => {
-	const x = node.position?.x ?? 0;
-	const y = node.position?.y ?? 0;
-	return x >= section.position?.x && y >= section.position?.y &&
-		x <= section.position.x + section.width && y <= section.position.y + section.height;
-};
-const distance = (a, b) => Math.hypot((a.position?.x ?? 0) - (b.position?.x ?? 0), (a.position?.y ?? 0) - (b.position?.y ?? 0));
+function uniqueId(base, used) {
+	let id = slugify(base);
+	while (used.has(id)) id = `${id}-2`;
+	used.add(id);
+	return id;
+}
 
-const byLabel = new Map();
-for (const topic of topics) byLabel.set(topic.data.label, []);
-for (const sub of subtopics) {
-	let parent = null;
-	for (const box of sections) {
-		if (inside(sub, box) && SECTION_TOPIC[box.id]) { parent = SECTION_TOPIC[box.id]; break; }
+function childRecords(labels, used) {
+	return [...new Set(labels)].map((label) => ({ id: uniqueId(label, used), title: label }));
+}
+
+function curatedAngular(nodes) {
+	const topics = nodes.filter((node) => node.type === "topic" && node.data?.label);
+	const subtopics = nodes.filter((node) => node.type === "subtopic" && node.data?.label);
+	const sections = nodes.filter((node) => node.type === "section");
+	const inside = (node, section) => {
+		const x = node.position?.x ?? 0;
+		const y = node.position?.y ?? 0;
+		return x >= section.position?.x && y >= section.position?.y &&
+			x <= section.position.x + section.width && y <= section.position.y + section.height;
+	};
+	const byLabel = new Map(topics.map((topic) => [topic.data.label, []]));
+	for (const sub of subtopics) {
+		let parent = null;
+		for (const box of sections) {
+			if (inside(sub, box) && ANGULAR_SECTION_TOPIC[box.id]) { parent = ANGULAR_SECTION_TOPIC[box.id]; break; }
+		}
+		if (!parent) {
+			let best = null;
+			let bestDistance = Infinity;
+			for (const topic of topics) {
+				const d = distance(sub, topic);
+				if (d < bestDistance) { bestDistance = d; best = topic; }
+			}
+			parent = best?.data.label;
+		}
+		if (ANGULAR_MOVES[sub.data.label]) parent = ANGULAR_MOVES[sub.data.label];
+		if (parent && byLabel.has(parent)) byLabel.get(parent).push(sub.data.label);
 	}
-	if (!parent) {
+	const usedTopicIds = new Set();
+	const records = new Map();
+	for (const topic of topics) {
+		const id = uniqueId(topic.data.label, usedTopicIds);
+		records.set(topic.data.label, {
+			id,
+			title: topic.data.label,
+			subtopics: childRecords(byLabel.get(topic.data.label) ?? [], new Set()),
+		});
+	}
+	const known = new Set(records.keys());
+	const usedTrackIds = new Set();
+	return ANGULAR_TRACKS.map((track) => {
+		const id = uniqueId(track.id, usedTrackIds);
+		const mapped = track.topics.map((title) => {
+			if (!known.has(title)) throw new Error(`curated track topic not in the roadmap: ${title}`);
+			return records.get(title);
+		});
+		return { id, title: track.title, topics: mapped };
+	});
+}
+
+/** Generic mapping for every other roadmap: sort topics by the visual flow
+ *  and attach each subtopic to its nearest topic. One track; the map's
+ *  track label is the roadmap title. */
+function genericTracks(nodes, roadmap, slug) {
+	const topics = nodes.filter((node) => node.type === "topic" && node.data?.label);
+	const subtopics = nodes.filter((node) => node.type === "subtopic" && node.data?.label);
+	const orderedTopics = [...topics].sort((a, b) =>
+		(a.position?.y ?? 0) - (b.position?.y ?? 0) || (a.position?.x ?? 0) - (b.position?.x ?? 0),
+	);
+	const synthetic = orderedTopics.length === 0;
+	const topicNodes = synthetic
+		? [{ data: { label: roadmap.title?.card ?? slug }, position: { x: 0, y: 0 } }]
+		: orderedTopics;
+	const usedTopicIds = new Set();
+	const groups = new Map(topicNodes.map((topic) => [topic.data.label, []]));
+	for (const sub of subtopics) {
+		if (synthetic) {
+			groups.get(topicNodes[0].data.label).push(sub.data.label);
+			continue;
+		}
 		let best = null;
 		let bestDistance = Infinity;
-		for (const topic of topics) {
+		for (const topic of topicNodes) {
 			const d = distance(sub, topic);
 			if (d < bestDistance) { bestDistance = d; best = topic; }
 		}
-		parent = best?.data.label;
+		if (best) groups.get(best.data.label).push(sub.data.label);
 	}
-	if (MOVES[sub.data.label]) parent = MOVES[sub.data.label];
-	if (parent && byLabel.has(parent)) byLabel.get(parent).push(sub.data.label);
+	const usedSubIds = new Map();
+	const mapped = topicNodes.map((topic) => {
+		const id = uniqueId(topic.data.label, usedTopicIds);
+		if (!usedSubIds.has(id)) usedSubIds.set(id, new Set());
+		return {
+			id,
+			title: topic.data.label,
+			subtopics: childRecords(groups.get(topic.data.label) ?? [], usedSubIds.get(id)),
+		};
+	});
+	return [{ id: "roadmap", title: roadmap.title?.card ?? slug, topics: mapped }];
 }
 
-const usedTopicIds = new Set();
-const topicRecords = new Map();
-for (const topic of topics) {
-	let id = slugify(topic.data.label);
-	while (usedTopicIds.has(id)) id = `${id}-2`;
-	usedTopicIds.add(id);
-	const children = [...new Set(byLabel.get(topic.data.label) ?? [])];
-	const usedChildIds = new Set();
-	const childRecords = children.map((label) => {
-		let childId = slugify(label);
-		while (usedChildIds.has(childId)) childId = `${childId}-2`;
-		usedChildIds.add(childId);
-		return { id: childId, title: label };
-	});
-	topicRecords.set(topic.data.label, { id, title: topic.data.label, subtopics: childRecords });
-}
-
-const knownTopics = new Set(topics.map((topic) => topic.data.label));
-const usedTrackIds = new Set();
-const tracks = TRACKS.map((track) => {
-	if (usedTrackIds.has(track.id)) throw new Error(`duplicate track id ${track.id}`);
-	usedTrackIds.add(track.id);
-	const mapped = track.topics.map((title) => {
-		if (!knownTopics.has(title)) throw new Error(`track topic not in the roadmap: ${title}`);
-		return topicRecords.get(title);
-	});
+function dataset(slug, roadmap) {
+	const nodes = Array.isArray(roadmap.nodes) ? roadmap.nodes : [];
+	const tracks = slug === "angular" ? curatedAngular(nodes) : genericTracks(nodes, roadmap, slug);
 	return {
-		id: track.id,
-		title: track.title,
-		topics: mapped,
+		slug,
+		title: roadmap.title?.card ?? roadmap.title?.page ?? slug,
+		source: `https://roadmap.sh/${slug}`,
+		importedAt: new Date().toISOString(),
+		tracks,
 	};
-});
+}
 
-const dataDir = process.env.LH_DATA_DIR ? path.resolve(process.env.LH_DATA_DIR) : path.join(ROOT, "data");
-const output = path.join(dataDir, "roadmaps", `${slug}.json`);
-fs.mkdirSync(path.dirname(output), { recursive: true });
-fs.writeFileSync(output, `${JSON.stringify({
-	slug,
-	title: roadmap.title?.card ?? roadmap.title?.page ?? slug,
-	source: `https://roadmap.sh/${slug}`,
-	importedAt: new Date().toISOString(),
-	tracks,
-}, null, 2)}\n`);
+async function importOne(slug) {
+	const response = await fetch(`https://roadmap.sh/api/v1-official-roadmap/${slug}`);
+	if (!response.ok) throw new Error(`roadmap.sh returned ${response.status}`);
+	const roadmap = await response.json();
+	const data = dataset(slug, roadmap);
+	const output = path.join(dataDir, "roadmaps", `${slug}.json`);
+	fs.mkdirSync(path.dirname(output), { recursive: true });
+	fs.writeFileSync(output, `${JSON.stringify(data, null, 2)}\n`);
+	const topicCount = data.tracks.reduce((n, track) => n + track.topics.length, 0);
+	const subtopicCount = data.tracks.reduce((n, track) => n + track.topics.reduce((m, topic) => m + topic.subtopics.length, 0), 0);
+	return { slug, title: data.title, tracks: data.tracks.length, topicCount, subtopicCount, output };
+}
 
-const topicCount = tracks.reduce((n, track) => n + track.topics.length, 0);
-const subtopicCount = tracks.reduce((n, track) => n + track.topics.reduce((m, topic) => m + topic.subtopics.length, 0), 0);
-console.log(`[roadmap] ${roadmap.title?.card ?? slug}: ${tracks.length} tracks, ${topicCount} topics, ${subtopicCount} subtopics -> ${output}`);
+const catalog = requested === "all" ? readCatalog() : null;
+const slugs = catalog ? catalog.roadmaps.map((roadmap) => roadmap.slug) : [requested];
+const failures = [];
+for (const slug of slugs) {
+	try {
+		const result = await importOne(slug);
+		console.log(`[roadmap] ${result.title}: ${result.tracks} tracks, ${result.topicCount} topics, ${result.subtopicCount} subtopics -> ${result.output}`);
+	} catch (err) {
+		failures.push({ slug, message: err instanceof Error ? err.message : String(err) });
+		console.error(`[roadmap] ${slug}: ${failures.at(-1).message}`);
+	}
+}
+if (catalog) {
+	console.log(`[roadmap] imported ${slugs.length - failures.length}/${slugs.length} catalog roadmaps`);
+	if (failures.length > 0) {
+		console.error(`[roadmap] ${failures.length} failed: ${failures.map((failure) => failure.slug).join(", ")}`);
+		process.exitCode = 1;
+	}
+}

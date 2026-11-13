@@ -43,6 +43,27 @@ export interface RoadmapDataset {
 	tracks: RoadmapTrack[];
 }
 
+export interface RoadmapCatalogItem {
+	slug: string;
+	title: string;
+	type: string;
+	category: string;
+	subcategory: string;
+}
+
+export interface RoadmapCatalog {
+	source: string;
+	importedAt: string;
+	categories: Array<{
+		title: string;
+		subCategories: Array<{
+			title: string;
+			roadmaps: Array<{ slug: string; title: string; type: string }>;
+		}>;
+	}>;
+	roadmaps: RoadmapCatalogItem[];
+}
+
 function roadmapFile(slug: string): string {
 	return path.join(/* turbopackIgnore: true */ PATHS.data, "roadmaps", `${slug}.json`);
 }
@@ -66,23 +87,51 @@ export function readRoadmap(slug: string): RoadmapDataset | null {
 	return readDataset(roadmapFile(slug));
 }
 
-/** The imported roadmap whose title/slug the session topic names, if any. */
+/** The imported roadmap catalog for the read quick start. */
+export function readRoadmapCatalog(): RoadmapCatalog | null {
+	try {
+		const data = JSON.parse(fs.readFileSync(/* turbopackIgnore: true */ path.join(PATHS.data, "roadmaps", "catalog.json"), "utf-8")) as RoadmapCatalog;
+		if (!Array.isArray(data.roadmaps) || !Array.isArray(data.categories)) return null;
+		return data;
+	} catch {
+		return null;
+	}
+}
+
+/** Slugs with a seeded graph preset available. */
+export function roadmapPresetSlugs(): Set<string> {
+	try {
+		const dir = path.join(/* turbopackIgnore: true */ PATHS.data, "roadmaps");
+		return new Set(fs.readdirSync(/* turbopackIgnore: true */ dir)
+			.filter((file) => file.endsWith(".json") && file !== "catalog.json")
+			.map((file) => file.slice(0, -".json".length)));
+	} catch {
+		return new Set();
+	}
+}
+
+/** The imported roadmap whose title/slug the session topic names, if any.
+ *  Prefers an exact normalized match, then a word-sized substring, so a
+ *  one-letter roadmap ("C") cannot capture every title containing a "c". */
 export function roadmapForTitle(title: string): RoadmapDataset | null {
 	const needle = normalize(title);
 	if (!needle) return null;
+	const exact: RoadmapDataset[] = [];
+	const loose: RoadmapDataset[] = [];
 	try {
 		const dir = path.join(/* turbopackIgnore: true */ PATHS.data, "roadmaps");
 		for (const file of fs.readdirSync(/* turbopackIgnore: true */ dir)) {
-			if (!file.endsWith(".json")) continue;
+			if (!file.endsWith(".json") || file === "catalog.json") continue;
 			const roadmap = readDataset(path.join(dir, file));
 			if (!roadmap) continue;
 			const names = [roadmap.slug, roadmap.title].map(normalize);
-			if (names.some((name) => name && needle.includes(name))) return roadmap;
+			if (names.includes(needle)) exact.push(roadmap);
+			else if (names.some((name) => name.length >= 4 && needle.includes(name))) loose.push(roadmap);
 		}
 	} catch {
 		/* no imported roadmaps — normal read sessions still work */
 	}
-	return null;
+	return exact[0] ?? loose[0] ?? null;
 }
 
 function truncate(value: string, max: number): string {
@@ -218,12 +267,13 @@ export function roadmapChildSeed(
 
 /** Seed a read session's root document when its opening topic names an
  *  imported roadmap. Called once, at session creation. */
-export function seedRoadmapForChat(chatStore: ChatStore, chatId: string, title: string): boolean {
-	const roadmap = roadmapForTitle(title);
+export function seedRoadmapForChat(chatStore: ChatStore, chatId: string, title: string, slug?: string): boolean {
+	const roadmap = (slug ? readRoadmap(slug) : null) ?? roadmapForTitle(title);
 	if (!roadmap) return false;
 	const record = chatStore.getChat(chatId);
 	if (!record || record.kind !== "read" || record.document) return false;
 	chatStore.saveDocument(chatId, roadmapRootSeed(roadmap));
 	chatStore.saveReadingDocumentId(chatId, STUDY_ROOT_DOCUMENT_ID);
+	chatStore.saveRoadmapSlug(chatId, roadmap.slug);
 	return true;
 }

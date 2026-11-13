@@ -76,6 +76,9 @@ export interface ChatStore {
 	/** Remember which document the learner is reading; the floating chat
 	 *  steers that document. View state: does not bump updatedAt. */
 	saveReadingDocumentId(id: string, documentId: string): void;
+	/** Remember the imported roadmap preset a read session started from
+	 *  (quick-start identity). Not conversation activity. */
+	saveRoadmapSlug(id: string, roadmapSlug: string): void;
 	/** Append one usage entry to the record's turn log (the money channel,
 	 * 2026-09): idempotent per turn id — each request carries its own, so
 	 * a turn persisted twice appends once while continuation turns (which

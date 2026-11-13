@@ -92,6 +92,35 @@ describe("buildRoadmapGraph", () => {
 		assert.equal(layout.lines.filter((line) => line.kind === "branch").length, 3);
 	});
 
+	it("splits a big topic into left and right group boxes", () => {
+		const big: StudyDocument = {
+			...ROOT,
+			sections: [
+				{ id: "overview", heading: "Overview", body: "Start." },
+				{
+					id: "components",
+					heading: "Components",
+					body: "Seed.",
+					suggestions: Array.from({ length: 12 }, (_, i) => ({
+						id: `sub-${i}`,
+						heading: `Subtopic ${i}`,
+						blurb: "Roadmap subtopic.",
+					})),
+				},
+			],
+			roadmap: {
+				slug: "angular",
+				title: "Angular",
+				source: "https://roadmap.sh/angular",
+				tracks: [{ id: "foundations", title: "Foundations", topicIds: ["components"] }],
+			},
+		};
+		const layout = buildRoadmapGraph(big, []);
+		assert.equal(layout.boxes.length, 2);
+		assert.deepEqual(layout.boxes.map((box) => box.side), ["left", "right"]);
+		assert.equal(layout.nodes.filter((node) => node.kind === "subtopic").length, 12);
+	});
+
 	it("recognizes only the roadmap root", () => {
 		assert.equal(isRoadmapDocument(ROOT), true);
 		assert.equal(isRoadmapDocument(CHILD), false);

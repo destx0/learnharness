@@ -3,9 +3,9 @@
 /**
  * THE ROADMAP MAP (2026-11-13).
  *
- * The roadmap.sh-style canvas for an imported roadmap root. Every main
- * topic is a yellow node on a central blue spine, with its roadmap
- * subtopics in a cream group box to the left or right. Unlike the compact
+ * The roadmap.sh-style layout for an imported roadmap root. Every main
+ * topic is a card on a central primary spine, with its roadmap subtopics in
+ * a muted group box to the left or right. Theme colors throughout. Unlike the compact
  * doc/chapter graph, this is the whole subject at a glance: all main
  * topics and all subtopics are present from the start. A subtopic without
  * a generated document is still clickable (it starts the deep-dive turn);
@@ -128,12 +128,21 @@ export function buildRoadmapGraph(
 		}
 	}
 	const specs = topicSections.map((section) => {
-		const count = section.suggestions?.length ?? 0;
-		const columns = count > 2 ? 2 : 1;
-		const rows = Math.max(1, Math.ceil(count / columns));
+		const suggestions = section.suggestions ?? [];
+		const count = suggestions.length;
+		// A big topic splits into left and right group boxes like the
+		// roadmap.sh poster (Networking & Protocols); small topics use one
+		// box alternating sides.
+		const split = count > 6;
+		const half = split ? Math.ceil(count / 2) : count;
+		const chunks = split
+			? [suggestions.slice(0, half), suggestions.slice(half)]
+			: [suggestions];
+		const columns = Math.max(1, ...chunks.map((chunk) => chunk.length > 2 ? 2 : 1));
+		const rows = Math.max(1, ...chunks.map((chunk) => Math.ceil(chunk.length / columns)));
 		const boxWidth = count > 0 ? columns * LEAF_W + (columns - 1) * LEAF_GAP_X + 2 * BOX_PAD : 0;
 		const boxHeight = count > 0 ? rows * LEAF_H + (rows - 1) * LEAF_GAP_Y + 2 * BOX_PAD : 0;
-		return { section, count, columns, boxWidth, boxHeight };
+		return { section, suggestions, count, split, chunks, columns, boxWidth, boxHeight };
 	});
 	const maxBoxWidth = Math.max(0, ...specs.map((spec) => spec.boxWidth));
 	const spineX = PAD + maxBoxWidth + SPINE_GAP + MAIN_W / 2;
@@ -179,14 +188,18 @@ export function buildRoadmapGraph(
 				y2: centerY,
 			});
 		}
-		if (spec.count > 0) {
-			const side = index % 2 === 0 ? "left" : "right";
+		const sides: Array<"left" | "right"> = spec.split
+			? ["left", "right"]
+			: [index % 2 === 0 ? "left" : "right"];
+		for (const [sideIndex, side] of sides.entries()) {
+			const chunk = spec.chunks[sideIndex] ?? [];
+			if (chunk.length === 0) continue;
 			const boxX = side === "left"
 				? spineX - MAIN_W / 2 - SPINE_GAP - spec.boxWidth
 				: spineX + MAIN_W / 2 + SPINE_GAP;
 			const boxY = cursor;
 			boxes.push({
-				id: `box:${spec.section.id}`,
+				id: `box:${spec.section.id}:${side}`,
 				topicId: spec.section.id,
 				side,
 				x: boxX,
@@ -195,14 +208,14 @@ export function buildRoadmapGraph(
 				height: spec.boxHeight,
 			});
 			lines.push({
-				id: `branch:${spec.section.id}`,
+				id: `branch:${spec.section.id}:${side}`,
 				kind: "branch",
 				x1: side === "left" ? spineX - MAIN_W / 2 : spineX + MAIN_W / 2,
 				y1: centerY,
 				x2: side === "left" ? boxX + spec.boxWidth : boxX,
 				y2: centerY,
 			});
-			for (const [subIndex, suggestion] of (spec.section.suggestions ?? []).entries()) {
+			for (const [subIndex, suggestion] of chunk.entries()) {
 				const column = subIndex % spec.columns;
 				const row = Math.floor(subIndex / spec.columns);
 				const child = children.get(`${spec.section.id}\u0000${suggestion.id}`);
@@ -423,7 +436,7 @@ export function RoadmapGraphView({
 								fontSize={11}
 								fontFamily="var(--font-ui, ui-sans-serif)"
 							>
-								{layout.mainTopics} main topics · {layout.subtopics} subtopics · click a topic to read it
+								{layout.mainTopics} main topics · {layout.subtopics} subtopics · click a card to read or write it
 							</text>
 							{layout.trackLabels.map((label) => (
 								<g key={label.id}>

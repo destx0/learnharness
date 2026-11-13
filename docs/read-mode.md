@@ -324,10 +324,12 @@ When the root carries a `roadmap` field, the graph toggle opens a
 roadmap.sh-style map instead of the compact document graph:
 
 - a large, tall canvas with the subject title at the top;
-- **yellow main-topic nodes** on a central blue spine;
-- each topic's **cream subtopic nodes** in a bordered group box to the
-  left or right, alternating;
-- solid blue spine segments and dotted blue branch connectors;
+- main-topic cards on a central primary spine (theme card + primary
+  accent);
+- each topic's subtopic cards in a bordered, muted group box to the left
+  or right, alternating;
+- solid primary spine segments and dashed primary branch connectors;
+- theme colors throughout (the layout is roadmap.sh's, not its palette);
 - track labels (Foundations, Templates & UI, …) across the canvas;
 - generated subtopics carry a green status dot; writing pulses blue,
   failed is red.

@@ -16,7 +16,15 @@ const ROOT: StudyDocument = {
 	title: "Linear algebra",
 	sections: [
 		{ id: "overview", heading: "Overview", body: "Start here." },
-		{ id: "maps", heading: "Linear maps", body: "Maps preserve structure." },
+		{
+			id: "maps",
+			heading: "Linear maps",
+			body: "Maps preserve structure.",
+			suggestions: [
+				{ id: "rank", heading: "Rank and nullity", blurb: "What a map destroys and keeps." },
+				{ id: "eigen", heading: "Eigenvectors", blurb: "Already written below." },
+			],
+		},
 	],
 	revision: 2,
 	updatedAt: "2026-11-12T12:00:00.000Z",
@@ -38,6 +46,9 @@ describe("buildReadGraph", () => {
 		const graph = buildReadGraph([ROOT, CHILD]);
 		assert.equal(graph.nodes.filter((node) => node.kind === "document").length, 2);
 		assert.equal(graph.nodes.filter((node) => node.kind === "section").length, 3);
+		const suggestion = graph.nodes.find((node) => node.kind === "suggestion");
+		assert.equal(suggestion?.label, "Rank and nullity");
+		assert.equal(suggestion?.topicId, "rank");
 		const deeper = graph.edges.find((edge) => edge.kind === "deeper");
 		assert.equal(deeper?.from, readGraphNodeId("root", "maps"));
 		assert.equal(deeper?.to, readGraphNodeId("doc_eigen"));
@@ -46,6 +57,7 @@ describe("buildReadGraph", () => {
 		assert.equal(related?.to, readGraphNodeId("root", "overview"));
 		assert.equal(related?.reason, "Sets up the notation.");
 		assert.equal(graph.edges.filter((edge) => edge.kind === "contains").length, 3);
+		assert.equal(graph.edges.filter((edge) => edge.kind === "suggestion").length, 1);
 	});
 
 	it("drops links whose target document or chapter no longer exists", () => {
@@ -57,10 +69,10 @@ describe("buildReadGraph", () => {
 describe("layoutReadGraph", () => {
 	it("places every node with a positive extent and routes every edge", () => {
 		const placed = layoutReadGraph(buildReadGraph([ROOT, CHILD]));
-		assert.equal(placed.nodes.length, 5);
+		assert.equal(placed.nodes.length, 6);
 		assert.ok(placed.width > 0);
 		assert.ok(placed.height > 0);
-		assert.equal(placed.edges.length, 5);
+		assert.equal(placed.edges.length, 6);
 		for (const node of placed.nodes) {
 			assert.ok(node.x >= 0);
 			assert.ok(node.y >= 0);

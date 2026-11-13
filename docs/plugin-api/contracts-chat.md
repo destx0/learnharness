@@ -19,6 +19,7 @@
 - [StudyDocument](#studydocument) — supporting declaration
 - [StudyDocumentStatus](#studydocumentstatus) — supporting declaration
 - [StudyRelatedLink](#studyrelatedlink) — supporting declaration
+- [StudyRoadmapRef](#studyroadmapref) — supporting declaration
 - [StudySection](#studysection) — supporting declaration
 - [StudySectionQuestion](#studysectionquestion) — supporting declaration
 - [StudyTopicSuggestion](#studytopicsuggestion) — supporting declaration
@@ -1089,6 +1090,50 @@ sectionId?: string;
 reason: string;
 ```
 
+## StudyRoadmapRef
+
+Supporting declaration used by a public type. This is not an additional runtime API or SDK helper.
+
+One deeper-topic direction the read agent suggests for a chapter. The
+learner chooses one; the app then either opens an existing document
+(`documentId`) or writes a new child document for it.
+
+A pointer into an imported roadmap preset (roadmap.sh). Seeded
+suggestions carry it so the deeper route can build the next level of
+the roadmap; agent-authored suggestions leave it absent.
+
+```ts
+export interface StudyRoadmapRef {
+    slug: string;
+    nodeId: string;
+    kind: "track" | "topic";
+}
+```
+
+**Member index** (including nested object members; inherited members are defined in the linked base types):
+
+- [slug](#studyroadmapref-slug)
+- [nodeId](#studyroadmapref-nodeid)
+- [kind](#studyroadmapref-kind)
+
+### StudyRoadmapRef slug
+
+```ts
+slug: string;
+```
+
+### StudyRoadmapRef nodeId
+
+```ts
+nodeId: string;
+```
+
+### StudyRoadmapRef kind
+
+```ts
+kind: "track" | "topic";
+```
+
 ## StudySection
 
 Supporting declaration used by a public type. This is not an additional runtime API or SDK helper.
@@ -1198,10 +1243,6 @@ answer: string;
 
 Supporting declaration used by a public type. This is not an additional runtime API or SDK helper.
 
-One deeper-topic direction the read agent suggests for a chapter. The
-learner chooses one; the app then either opens an existing document
-(`documentId`) or writes a new child document for it.
-
 ```ts
 export interface StudyTopicSuggestion {
     id: string;
@@ -1209,8 +1250,11 @@ export interface StudyTopicSuggestion {
     blurb: string;
     documentId?: string;
     sectionId?: string;
+    roadmap?: StudyRoadmapRef;
 }
 ```
+
+**Related types:** [StudyRoadmapRef](contracts-chat.md#studyroadmapref).
 
 **Member index** (including nested object members; inherited members are defined in the linked base types):
 
@@ -1219,6 +1263,7 @@ export interface StudyTopicSuggestion {
 - [blurb](#studytopicsuggestion-blurb)
 - [documentId](#studytopicsuggestion-documentid)
 - [sectionId](#studytopicsuggestion-sectionid)
+- [roadmap](#studytopicsuggestion-roadmap)
 
 ### StudyTopicSuggestion id
 
@@ -1257,6 +1302,14 @@ A chapter within `documentId` (defaults to that document's top).
 
 ```ts
 sectionId?: string;
+```
+
+### StudyTopicSuggestion roadmap
+
+Imported-roadmap source; preserved across agent edits by id.
+
+```ts
+roadmap?: StudyRoadmapRef;
 ```
 
 ## TurnUsage

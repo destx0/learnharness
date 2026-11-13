@@ -24,9 +24,10 @@ import { fitGraphView, fitZoomFor, zoomedGraphView, type Viewport } from "./pan-
 
 export interface ReadGraphNode {
 	id: string;
-	kind: "document" | "section";
+	kind: "document" | "section" | "suggestion";
 	documentId: string;
 	sectionId?: string;
+	topicId?: string;
 	label: string;
 	status?: StudyDocumentStatus;
 	/** The document's generation depth (0 = root). */
@@ -37,7 +38,7 @@ export interface ReadGraphEdge {
 	id: string;
 	from: string;
 	to: string;
-	kind: "contains" | "deeper" | "related";
+	kind: "contains" | "deeper" | "related" | "suggestion";
 	reason?: string;
 }
 
@@ -50,6 +51,8 @@ const DOC_WIDTH = 200;
 const DOC_HEIGHT = 62;
 const SECTION_WIDTH = 176;
 const SECTION_HEIGHT = 40;
+const SUGGESTION_WIDTH = 164;
+const SUGGESTION_HEIGHT = 32;
 
 export function readGraphNodeId(documentId: string, sectionId?: string): string {
 	return sectionId ? `sec:${documentId}:${sectionId}` : `doc:${documentId}`;
@@ -60,6 +63,10 @@ export function buildReadGraph(documents: readonly StudyDocument[]): ReadGraphDa
 	const byId = new Map(documents.map((doc) => [doc.id, doc]));
 	const nodes: ReadGraphNode[] = [];
 	const edges: ReadGraphEdge[] = [];
+	const generatedTopics = new Set<string>();
+	for (const doc of documents) {
+		if (doc.parent) generatedTopics.add(`${doc.parent.documentId}\u0000${doc.parent.sectionId}\u0000${doc.parent.topicId}`);
+	}
 	const depthOf = (doc: StudyDocument): number => {
 		let depth = 0;
 		let current: StudyDocument | undefined = doc;
@@ -108,6 +115,33 @@ export function buildReadGraph(documents: readonly StudyDocument[]): ReadGraphDa
 		seenDeeper.add(key);
 		edges.push({ id: `deeper:${from}:${to}`, from, to, kind: "deeper" });
 	}
+	// Ungenerated chapter suggestions are ghost nodes: the roadmap's next
+	// level stays visible before the learner commits a turn to it.
+	for (const doc of documents) {
+		const depth = depthOf(doc);
+		for (const section of doc.sections) {
+			for (const topic of section.suggestions ?? []) {
+				if (topic.documentId) continue; // already-written target is a real doc node
+				if (generatedTopics.has(`${doc.id}\u0000${section.id}\u0000${topic.id}`)) continue;
+				const nodeId = `sug:${doc.id}:${section.id}:${topic.id}`;
+				nodes.push({
+					id: nodeId,
+					kind: "suggestion",
+					documentId: doc.id,
+					sectionId: section.id,
+					topicId: topic.id,
+					label: topic.heading,
+					depth: depth + 1,
+				});
+				edges.push({
+					id: `suggestion:${nodeId}`,
+					from: readGraphNodeId(doc.id, section.id),
+					to: nodeId,
+					kind: "suggestion",
+				});
+			}
+		}
+	}
 	// Agent-authored cross-links. Targets that vanished are dropped from
 	// the view (the reading footer hides them too).
 	const seenRelated = new Set<string>();
@@ -151,8 +185,8 @@ export function layoutReadGraph(data: ReadGraphData): PlacedGraph {
 	g.setGraph({ rankdir: "LR", nodesep: 16, ranksep: 74, marginx: 28, marginy: 28 });
 	for (const node of data.nodes) {
 		g.setNode(node.id, {
-			width: node.kind === "document" ? DOC_WIDTH : SECTION_WIDTH,
-			height: node.kind === "document" ? DOC_HEIGHT : SECTION_HEIGHT,
+			width: node.kind === "document" ? DOC_WIDTH : node.kind === "section" ? SECTION_WIDTH : SUGGESTION_WIDTH,
+			height: node.kind === "document" ? DOC_HEIGHT : node.kind === "section" ? SECTION_HEIGHT : SUGGESTION_HEIGHT,
 		});
 	}
 	for (const edge of data.edges) {
@@ -164,8 +198,8 @@ export function layoutReadGraph(data: ReadGraphData): PlacedGraph {
 	const placed = new Map<string, PlacedNode>();
 	for (const node of data.nodes) {
 		const pos = g.node(node.id) as { x?: number; y?: number } | undefined;
-		const width = node.kind === "document" ? DOC_WIDTH : SECTION_WIDTH;
-		const height = node.kind === "document" ? DOC_HEIGHT : SECTION_HEIGHT;
+		const width = node.kind === "document" ? DOC_WIDTH : node.kind === "section" ? SECTION_WIDTH : SUGGESTION_WIDTH;
+		const height = node.kind === "document" ? DOC_HEIGHT : node.kind === "section" ? SECTION_HEIGHT : SUGGESTION_HEIGHT;
 		placed.set(node.id, {
 			...node,
 			width,
@@ -230,11 +264,13 @@ export function ReadGraphView({
 	documents,
 	activeDocumentId,
 	onOpenDocument,
+	onGoDeeper,
 	className,
 }: {
 	documents: readonly StudyDocument[];
 	activeDocumentId: string;
 	onOpenDocument: (documentId: string, sectionId?: string) => void;
+	onGoDeeper: (documentId: string, sectionId: string, topicId: string) => void;
 	className?: string;
 }) {
 	const data = useMemo(() => buildReadGraph(documents), [documents]);
@@ -287,6 +323,10 @@ export function ReadGraphView({
 
 	const nodeClick = (node: ReadGraphNode) => {
 		if (movedRef.current) return;
+		if (node.kind === "suggestion" && node.sectionId && node.topicId) {
+			onGoDeeper(node.documentId, node.sectionId, node.topicId);
+			return;
+		}
 		onOpenDocument(node.documentId, node.sectionId);
 	};
 
@@ -375,16 +415,17 @@ export function ReadGraphView({
 									fill="none"
 									stroke={edge.kind === "related" ? "var(--primary)" : "var(--border)"}
 									strokeWidth={edge.kind === "related" ? 1 : 1.25}
-									strokeDasharray={edge.kind === "related" ? "4 4" : undefined}
-									opacity={edge.kind === "related" ? 0.55 : 0.8}
+									strokeDasharray={edge.kind === "related" || edge.kind === "suggestion" ? "4 4" : undefined}
+									opacity={edge.kind === "related" ? 0.55 : edge.kind === "suggestion" ? 0.45 : 0.8}
 									markerEnd={edge.kind === "deeper" ? "url(#read-graph-arrow)" : undefined}
 								>
 									{edge.reason ? <title>{edge.reason}</title> : null}
 								</path>
 							))}
 							{placed.nodes.map((node) => {
-								const active = node.documentId === activeDocumentId;
+								const active = node.documentId === activeDocumentId && node.kind === "document";
 								const documentNode = node.kind === "document";
+								const suggestionNode = node.kind === "suggestion";
 								return (
 									<g
 										key={node.id}
@@ -407,21 +448,25 @@ export function ReadGraphView({
 											width={node.width}
 											height={node.height}
 											rx={documentNode ? 10 : 7}
-											fill="var(--card)"
+											fill={suggestionNode ? "var(--background)" : "var(--card)"}
 											stroke={active ? "var(--primary)" : "var(--border)"}
 											strokeWidth={active ? 1.6 : 1}
-											opacity={documentNode ? 1 : 0.92}
+											strokeDasharray={suggestionNode ? "4 3" : undefined}
+											opacity={suggestionNode ? 0.8 : documentNode ? 1 : 0.92}
 										/>
 										<text
-											x={12}
-											y={documentNode ? 25 : 25}
-											fill="var(--foreground)"
-											fontSize={documentNode ? 12 : 11}
+											x={suggestionNode ? 22 : 12}
+											y={documentNode ? 25 : 21}
+											fill={suggestionNode ? "var(--muted-foreground)" : "var(--foreground)"}
+											fontSize={documentNode ? 12 : suggestionNode ? 10 : 11}
 											fontFamily="var(--font-ui, ui-sans-serif)"
 											fontWeight={documentNode ? 600 : 400}
 										>
-											{truncate(node.label, documentNode ? 27 : 25)}
+											{truncate(node.label, documentNode ? 27 : suggestionNode ? 24 : 25)}
 										</text>
+										{suggestionNode && (
+											<text x={10} y={21} fill="var(--muted-foreground)" fontSize={11} fontFamily="var(--font-ui, ui-sans-serif)">+</text>
+										)}
 										{documentNode && (
 											<>
 												<circle
@@ -451,11 +496,12 @@ export function ReadGraphView({
 					</svg>
 				)}
 			</div>
-			<div className="flex shrink-0 items-center gap-4 border-t border-border/60 px-4 py-2 font-ui text-[10px] uppercase tracking-widest text-muted-foreground/80">
+			<div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/60 px-4 py-2 font-ui text-[10px] uppercase tracking-widest text-muted-foreground/80">
 				<span className="flex items-center gap-1.5"><span className="size-2 rounded-sm border border-border bg-card" /> Document</span>
 				<span className="flex items-center gap-1.5"><span className="size-2 rounded-sm border border-border/80 bg-card/70" /> Chapter</span>
 				<span className="flex items-center gap-1.5"><span className="h-px w-4 border-t border-dashed border-primary/70" /> Related</span>
-				<span className="ml-auto normal-case tracking-normal">Click a node to read it</span>
+				<span className="flex items-center gap-1.5"><span className="size-2 rounded-sm border border-dashed border-border bg-background" /> Suggested</span>
+				<span className="ml-auto normal-case tracking-normal">Click a topic to open or write it</span>
 			</div>
 		</div>
 	);

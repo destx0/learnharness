@@ -1,4 +1,4 @@
-import { handleChatInput, isTurnRunning, stores } from "@/src/server";
+import { handleChatInput, isTurnRunning, readRoadmap, roadmapChildSeed, stores } from "@/src/server";
 import {
 	createChildStudyDocument,
 	emit,
@@ -49,14 +49,24 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 	if (!parent || !found) return Response.json({ error: "No such deeper-topic suggestion" }, { status: 400 });
 	if (isTurnRunning(id)) return Response.json({ error: "A turn is already running for this session" }, { status: 409 });
 
+	let roadmapContext = "";
+	const roadmap = found.topic.roadmap ? readRoadmap(found.topic.roadmap.slug) : null;
+	const seedRoadmap = (base: StudyDocument): StudyDocument => {
+		if (!roadmap || !found.topic.roadmap) return base;
+		const seeded = roadmapChildSeed(roadmap, found.topic.roadmap.nodeId, base);
+		roadmapContext = seeded.context;
+		return seeded.document;
+	};
+
 	let child = studyDocumentChildForTopic(record, documentId, sectionId, topicId);
 	if (child) {
 		stores.chatStore.saveReadingDocumentId(id, child.id);
 		if (child.status === "writing" || child.status === "ready") {
 			return Response.json({ childDocument: child, started: false });
 		}
-		// Retry a failed (empty) child with the same id.
-		child = { ...child, status: "writing", updatedAt: new Date().toISOString() };
+		// Retry a failed (empty) child with the same id; a roadmap seed is
+		// rebuilt so the track/topic structure is not lost.
+		child = seedRoadmap({ ...child, status: "writing", updatedAt: new Date().toISOString() });
 		stores.chatStore.saveDocument(id, child);
 		emit("document-changed", { chatId: id, documentId: child.id });
 	} else {
@@ -72,6 +82,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 			if (err instanceof StudyDocumentError) return Response.json({ error: err.message }, { status: 400 });
 			throw err;
 		}
+		child = seedRoadmap(child);
 		stores.chatStore.saveDocument(id, child);
 		stores.chatStore.saveReadingDocumentId(id, child.id);
 		emit("document-changed", { chatId: id, documentId: child.id });
@@ -88,6 +99,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 		sectionId,
 		topicId,
 		childDocumentId: pending.id,
+		...(roadmapContext ? { roadmapContext } : {}),
 	}).then((response) => {
 		if (!response.ok) failPendingChild(id, pending);
 	}).catch((err) => {

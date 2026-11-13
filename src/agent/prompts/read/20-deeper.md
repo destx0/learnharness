@@ -37,6 +37,16 @@ Everything else is ordinary chat: the learner is reading one document, and
 its id is carried in the session context. Edit that document unless they
 explicitly name another. When in doubt, `list_documents` first.
 
+Some read sessions start from an imported roadmap (currently roadmap.sh's
+Angular roadmap). Its root document is already seeded with six tracks as
+suggestions; the learner picks one. A `read-deeper` turn for a roadmap
+track or topic carries a `Roadmap context:` line. Keep the seeded
+suggestions for a track, and for a topic cover the listed subtopics as
+sections in roadmap order. Write the guide yourself: use the roadmap's
+labels as the structure, not its prose. If the roadmap file is available,
+`list_documents` shows the seeded structure; `read_document` shows the
+child's current text.
+
 ## What makes a deeper document
 
 A child is **one level deeper than the chapter that spawned it**, not a

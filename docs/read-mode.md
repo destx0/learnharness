@@ -257,9 +257,92 @@ listeners); the pane refetches all documents on a short debounce.
   context.
 - `tests/read-document-route.test.ts` — GET shape, active-document route,
   target validation.
-- `tests/read-graph.test.ts` — graph projection and deterministic layout.
+- `tests/read-graph.test.ts` — graph projection, ghost suggestions, generated-child suppression, deterministic layout.
+- `tests/roadmap-seed.test.ts` — roadmap.sh import seed behavior.
 - `tests/render-read-pane.test.tsx` — drawer, breadcrumb, suggestions,
   self-check accordion, related links, graph toggle, failed/empty states.
 - `tests/chat-kind.test.ts` — child upsert + list payload exclusion.
 
 Status: implemented 2026-11-12.
+
+
+## Roadmap presets — roadmap.sh (2026-11-13)
+
+A read session about a known topic can start from an imported roadmap
+instead of a blank guide. Angular is the first preset, built from the
+[roadmap.sh Angular roadmap](https://roadmap.sh/angular).
+
+### Import
+
+```bash
+npm run roadmap:import -- angular
+```
+
+`scripts/import-roadmap.mjs` fetches roadmap.sh's official graph
+(`/api/v1-official-roadmap/<slug>`), imposes the read-mode tree, and writes
+`data/roadmaps/<slug>.json` under the mutable data dir (gitignored). Only
+labels and hierarchy are stored — never roadmap.sh prose. The script maps
+the visual graph into six root tracks:
+
+- Foundations — Introduction, Components, Communication, Understand Binding
+- Templates & UI — Templates, Template Syntax, Pipes, Directives
+- Architecture & Data — Modules, Routing, Services & Remote Data, Forms, HTTP Client
+- Reactivity & State — RxJS Basics, Signals, State Management, Zones
+- Platform & Tooling — Developer Tools, SSR, SSG
+- Quality & Security — Security, Accessibility, Performance, Testing, Internationalization, Animation
+
+Each track holds 3–6 roadmap topics; each topic holds its roadmap
+subtopics. The mapping uses the roadmap's visual section boxes plus
+nearest-topic assignment, with a small correction table for labels that
+sit across a visual gap.
+
+### Session seed
+
+`POST /api/chats` (read only) calls `seedRoadmapForChat` when the opening
+title names an imported roadmap. It writes a root document with:
+
+- title = the roadmap title;
+- one `overview` section with a short attribution/link and **six track
+  suggestions** (each carrying a `roadmap: {slug, nodeId, kind}` pointer);
+- `readingDocumentId = "root"`.
+
+The agent's first turn sees the seeded document (the `read-context` marker
+names it) and the prompt tells it not to write a blank version over a seed.
+The learner opens a track.
+
+### Child seeds
+
+When a suggestion carrying a roadmap pointer is chosen, the deeper route
+loads the preset and seeds the pending child before the writer turn:
+
+- **Track** — an `overview` section whose suggestions are the track's
+  topics, plus a `Roadmap context:` line for the writer. The agent builds
+  the track around the seeded topics.
+- **Topic** — an empty child plus a `Roadmap context:` line listing the
+  subtopics in roadmap order. The agent writes one section per subtopic,
+  with the usual directions and self-check questions.
+- The pointer survives agent edits by suggestion id; a refresh replaces it
+  with fresh agent-chosen directions.
+
+### Graph and tree
+
+Ungenerated suggestions are **ghost nodes**: dashed topic rows under their
+chapter in the contents drawer, and dashed suggestion nodes in the topic
+graph (section → suggestion). Clicking a ghost starts the same deeper turn
+as the inline card. When the child lands, the ghost is replaced by a real
+document node and its own chapters.
+
+### Tests
+
+- `tests/roadmap-seed.test.ts` — title match, root seed, track/topic child
+  seeds, no-overwrite rule.
+- `tests/read-graph.test.ts` — ghost suggestion nodes and generated-child
+  suppression.
+
+### Contract
+
+- Preset data is runtime state (`data/roadmaps/`), not source; a fresh
+  install has no preset until the import command runs.
+- The roadmap's copyright notice allows personal use; the app stores only
+  labels/hierarchy and links to the source. Do not commit imported data or
+  redistribute the roadmap's prose.

@@ -87,7 +87,7 @@ export type ChatInput =
 	| { type: "suggest-deeper"; documentId: string; sectionId: string }
 	/** Read mode's topic choice: the server has already created the
 	 *  pending child document; this starts the writing turn. */
-	| { type: "go-deeper"; documentId: string; sectionId: string; topicId: string; childDocumentId: string };
+	| { type: "go-deeper"; documentId: string; sectionId: string; topicId: string; childDocumentId: string; roadmapContext?: string };
 
 /** A wake-pipeline steer delivery — same turn composition, server-origin.
  *  Wave C (2026-09-26): the idle wake carries EVERY queued marker as its
@@ -342,7 +342,8 @@ function readContextAppends(record: {
 			break;
 		}
 	}
-	return [newReadContextMessage(record.readingDocumentId, document.title)];
+	const seeded = document.sections.some((section) => section.suggestions?.some((suggestion) => suggestion.roadmap !== undefined));
+	return [newReadContextMessage(record.readingDocumentId, document.title, seeded)];
 }
 
 export function inputAppends(
@@ -433,6 +434,7 @@ export function inputAppends(
 				topicHeading: found.topic.heading,
 				topicBlurb: found.topic.blurb,
 				childDocumentId: child.id,
+				...(input.roadmapContext ? { roadmapContext: input.roadmapContext } : {}),
 			})];
 		}
 	}

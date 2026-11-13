@@ -427,15 +427,17 @@ export interface ReadDeeperDetails extends ReadSuggestDetails {
 	topicHeading: string;
 	topicBlurb: string;
 	childDocumentId: string;
+	/** Imported-roadmap context for the writer (subtopics, track, etc.). */
+	roadmapContext?: string;
 }
 
 /** Which document the learner is reading, for ordinary chat steering. */
-export function newReadContextMessage(documentId: string, title: string): LhMarkerMessage {
+export function newReadContextMessage(documentId: string, title: string, roadmapSeeded = false): LhMarkerMessage {
 	return {
 		id: newMessageId(),
 		role: "custom",
 		customType: "read-context",
-		content: `[Session context] The learner is now reading the study document "${title}" (${documentId}). Unless they explicitly name another document, edit and discuss this one; call read_document with its id when you need the text.`,
+		content: `[Session context] The learner is now reading the study document "${title}" (${documentId}). Unless they explicitly name another document, edit and discuss this one; call read_document with its id when you need the text.${roadmapSeeded ? " This document is a roadmap-seeded starting graph: keep its structure and suggestions, do not write a blank first version over it." : ""}`,
 		display: false,
 		details: { documentId, title },
 		timestamp: Date.now(),
@@ -461,7 +463,7 @@ export function newReadDeeperMessage(details: ReadDeeperDetails): LhMarkerMessag
 		id: newMessageId(),
 		role: "custom",
 		customType: "read-deeper",
-		content: `[Session context] The learner chose the deeper direction "${details.topicHeading}" from the chapter "${details.sectionHeading}" (${details.sectionId}) in "${details.documentTitle}" (${details.documentId}). ${details.topicBlurb ? `The direction: ${details.topicBlurb} ` : ""}The active document is now the pending child "${details.topicHeading}" (${details.childDocumentId}); it has no sections yet. Read the parent chapter first with read_document(documentId="${details.documentId}", sectionId="${details.sectionId}"), then write the child with edit_document and documentId="${details.childDocumentId}" — one level deeper than the parent chapter, not a repeat of it. Give it real sections, starting from what the reader already learned. Add related links to existing documents when genuinely related from list_documents.`,
+		content: `[Session context] The learner chose the deeper direction "${details.topicHeading}" from the chapter "${details.sectionHeading}" (${details.sectionId}) in "${details.documentTitle}" (${details.documentId}). ${details.topicBlurb ? `The direction: ${details.topicBlurb} ` : ""}The active document is now the pending child "${details.topicHeading}" (${details.childDocumentId}); it has no sections yet. Read the parent chapter first with read_document(documentId="${details.documentId}", sectionId="${details.sectionId}"), then write the child with edit_document and documentId="${details.childDocumentId}" — one level deeper than the parent chapter, not a repeat of it. Give it real sections, starting from what the reader already learned. Add related links to existing documents when genuinely related from list_documents.${details.roadmapContext ? `\n\n${details.roadmapContext}` : ""}`,
 		display: false,
 		details,
 		timestamp: Date.now(),

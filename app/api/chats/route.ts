@@ -1,6 +1,6 @@
 import { chainsForSelection, formatChainLine } from "@/src/core";
 import { newGraphContextMessage, type GraphContextPick } from "@/src/core";
-import { compactionInFlight, createChat, isTurnRunning, listChats, readSettingsRecord, stores, titleFromPrompt } from "@/src/server";
+import { compactionInFlight, createChat, isTurnRunning, listChats, readSettingsRecord, seedRoadmapForChat, stores, titleFromPrompt } from "@/src/server";
 import type { ChatListItem } from "@/src/core";
 
 /** The session picker's list: record-derived summaries (phase, pending
@@ -32,6 +32,11 @@ export async function POST(req: Request) {
 				? ("read" as const)
 				: undefined;
 	const chat = createChat(titleFromPrompt(title || "Untitled session"), kind);
+	// A read session whose topic names an imported roadmap (roadmap.sh)
+	// starts with the root graph already seeded: tracks as suggestions,
+	// then topics/subtopics as the learner drills in. Missing/!imported
+	// presets leave the ordinary agent-written opening untouched.
+	if (kind === "read") seedRoadmapForChat(stores.chatStore, chat.id, chat.title);
 	// PER-SESSION MODELS (owner, 2026-09-28): a session owns its model +
 	// thinking level from birth — stamped verbatim from the STRONG slot,
 	// the new-session default. From here the strong slot never reaches

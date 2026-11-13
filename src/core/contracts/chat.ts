@@ -32,6 +32,15 @@ export type ChatKind = "teach" | "practice" | "read";
 /** One deeper-topic direction the read agent suggests for a chapter. The
  *  learner chooses one; the app then either opens an existing document
  *  (`documentId`) or writes a new child document for it. */
+/** A pointer into an imported roadmap preset (roadmap.sh). Seeded
+ *  suggestions carry it so the deeper route can build the next level of
+ *  the roadmap; agent-authored suggestions leave it absent. */
+export interface StudyRoadmapRef {
+	slug: string;
+	nodeId: string;
+	kind: "track" | "topic";
+}
+
 export interface StudyTopicSuggestion {
 	/** Stable lowercase slug, unique within the section — chosen once. */
 	id: string;
@@ -43,6 +52,8 @@ export interface StudyTopicSuggestion {
 	documentId?: string;
 	/** A chapter within `documentId` (defaults to that document's top). */
 	sectionId?: string;
+	/** Imported-roadmap source; preserved across agent edits by id. */
+	roadmap?: StudyRoadmapRef;
 }
 
 /** One suggested self-check question for a chapter. The learner answers it

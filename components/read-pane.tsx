@@ -509,6 +509,7 @@ export function ReadDocumentView({
 								record={record}
 								activeDocumentId={active?.id ?? ""}
 								onOpenDocument={onOpenDocument}
+								onGoDeeper={onGoDeeper}
 							/>
 						</nav>
 					</>
@@ -519,6 +520,7 @@ export function ReadDocumentView({
 						documents={documents}
 						activeDocumentId={active?.id ?? ""}
 						onOpenDocument={onOpenDocument}
+						onGoDeeper={onGoDeeper}
 						className="min-w-0 flex-1"
 					/>
 				) : sections.length === 0 ? (
@@ -646,10 +648,12 @@ function StudyTree({
 	record,
 	activeDocumentId,
 	onOpenDocument,
+	onGoDeeper,
 }: {
 	record: { document?: StudyDocument; documents: StudyDocument[] };
 	activeDocumentId: string;
 	onOpenDocument: (documentId: string, sectionId?: string) => void;
+	onGoDeeper: (documentId: string, sectionId: string, topicId: string) => void;
 }) {
 	const docs = studyDocumentList(record);
 	const breadcrumb = activeDocumentId ? studyDocumentBreadcrumb(record, activeDocumentId) : [];
@@ -723,6 +727,21 @@ function StudyTree({
 									<span className="truncate">{section.heading}</span>
 								</button>
 								{childrenOf(doc.id, section.id).map((child) => renderDoc(child, depth + 1))}
+								{(section.suggestions ?? [])
+									.filter((topic) => !topic.documentId && !childrenOf(doc.id, section.id).some((child) => child.parent?.topicId === topic.id))
+									.map((topic) => (
+										<button
+											key={`${section.id}:${topic.id}`}
+											type="button"
+											onClick={() => onGoDeeper(doc.id, section.id, topic.id)}
+											className="flex w-full cursor-pointer items-center gap-1.5 rounded-sm py-1 pr-2 text-left font-ui text-[11px] leading-snug text-muted-foreground/60 transition-colors hover:bg-accent/60 hover:text-foreground"
+											style={{ paddingLeft: 34 + (depth + 1) * 12 }}
+											title={topic.blurb}
+										>
+											<SparklesIcon className="size-3 shrink-0 opacity-60" aria-hidden="true" />
+											<span className="truncate">{topic.heading}</span>
+										</button>
+									))}
 							</div>
 						))}
 						{childrenWithoutSection.map((child) => renderDoc(child, depth + 1))}

@@ -133,6 +133,28 @@ describe("read deeper input appends", () => {
 		assert.equal(again[0]?.role, "user");
 	});
 
+	it("marks a roadmap-seeded root in the active-document context", () => {
+		const rec = record();
+		rec.document!.sections[0]!.suggestions![0]!.roadmap = { slug: "angular", nodeId: "track:foundations", kind: "track" };
+		const appends = inputAppends(rec, { type: "text", text: "Angular" });
+		const context = appends[0] as LhMarkerMessage | undefined;
+		assert.match(context?.content ?? "", /roadmap-seeded starting graph/);
+	});
+
+	it("carries the roadmap context into a chosen deeper turn", () => {
+		const rec = record();
+		rec.document!.sections[0]!.suggestions![0]!.roadmap = { slug: "angular", nodeId: "topic:components", kind: "topic" };
+		const [marker] = inputAppends(rec, {
+			type: "go-deeper",
+			documentId: "root",
+			sectionId: "maps",
+			topicId: "eigen",
+			childDocumentId: "doc_eigen",
+			roadmapContext: "Roadmap topic: Components. Subtopics: Selector; Template.",
+		}) as [LhMarkerMessage | undefined];
+		assert.match(marker?.content ?? "", /Roadmap topic: Components/);
+	});
+
 	it("re-adds the context after switching documents", () => {
 		const rec = record();
 		const first = inputAppends(rec, { type: "text", text: "Start." });

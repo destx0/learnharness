@@ -21,6 +21,7 @@ import type {
 	StudyDocumentStatus,
 	StudyRelatedLink,
 	StudySection,
+	StudyRoadmapRef,
 	StudySectionQuestion,
 	StudyTopicSuggestion,
 } from "./contracts/chat.ts";
@@ -406,7 +407,16 @@ export function applyStudyDocumentEdit(
 			}
 			if (patch.suggestions !== undefined) {
 				if (patch.suggestions.length === 0) delete existing.suggestions;
-				else existing.suggestions = validateSuggestions(patch.suggestions, documentId, patch.id, problems);
+				else {
+					// Keep imported-roadmap pointers when the agent re-sends a
+					// seeded suggestion without the UI-only reference.
+					const merged = patch.suggestions.map((suggestion) => {
+						if (!suggestion || typeof suggestion !== "object" || suggestion.roadmap) return suggestion;
+						const prior = existing.suggestions?.find((entry) => entry.id === suggestion.id);
+						return prior?.roadmap ? { ...suggestion, roadmap: prior.roadmap } : suggestion;
+					});
+					existing.suggestions = validateSuggestions(merged, documentId, patch.id, problems);
+				}
 			}
 			if (patch.questions !== undefined) {
 				if (patch.questions.length === 0) delete existing.questions;
@@ -544,6 +554,15 @@ function validateSuggestions(
 		} else if (suggestion.sectionId !== undefined) {
 			problems.push(`${label}: sectionId requires documentId`);
 		}
+		let roadmap: StudyRoadmapRef | undefined;
+		if (suggestion.roadmap !== undefined) {
+			const ref = suggestion.roadmap;
+			if (!ref || typeof ref !== "object" || typeof ref.slug !== "string" || !ref.slug || typeof ref.nodeId !== "string" || !ref.nodeId || (ref.kind !== "track" && ref.kind !== "topic")) {
+				problems.push(`${label}: invalid roadmap reference`);
+			} else {
+				roadmap = { slug: ref.slug, nodeId: ref.nodeId, kind: ref.kind };
+			}
+		}
 		if (heading && blurb) {
 			out.push({
 				id: suggestion.id,
@@ -551,6 +570,7 @@ function validateSuggestions(
 				blurb,
 				...(suggestion.documentId ? { documentId: suggestion.documentId } : {}),
 				...(suggestion.documentId && suggestion.sectionId ? { sectionId: suggestion.sectionId } : {}),
+				...(roadmap ? { roadmap } : {}),
 			});
 		}
 	}

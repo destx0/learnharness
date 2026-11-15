@@ -22,7 +22,7 @@ keys rendering on customType; the flag documents intent).
 export interface LhMarkerMessage {
     id: string;
     role: "custom";
-    customType: "graph-context" | "probe-handoff" | "subagent-steer" | "subagent-abort" | "plan-block" | "practice-thinking" | "plugin-problem-submission" | "practice-next" | "problem-dismissed" | "compaction" | "side-question" | "side-question-told" | "read-context" | "read-suggest" | "read-deeper" | "read-questions";
+    customType: "graph-context" | "probe-handoff" | "subagent-steer" | "subagent-abort" | "plan-block" | "practice-thinking" | "plugin-problem-submission" | "practice-next" | "problem-dismissed" | "compaction" | "side-question" | "side-question-told" | "read-context" | "read-chapter" | "read-suggest" | "read-deeper" | "read-questions";
     content: string;
     display: boolean;
     details: unknown;
@@ -57,7 +57,7 @@ role: "custom";
 ### LhMarkerMessage customType
 
 ```ts
-customType: "graph-context" | "probe-handoff" | "subagent-steer" | "subagent-abort" | "plan-block" | "practice-thinking" | "plugin-problem-submission" | "practice-next" | "problem-dismissed" | "compaction" | "side-question" | "side-question-told" | "read-context" | "read-suggest" | "read-deeper" | "read-questions";
+customType: "graph-context" | "probe-handoff" | "subagent-steer" | "subagent-abort" | "plan-block" | "practice-thinking" | "plugin-problem-submission" | "practice-next" | "problem-dismissed" | "compaction" | "side-question" | "side-question-told" | "read-context" | "read-chapter" | "read-suggest" | "read-deeper" | "read-questions";
 ```
 
 ### LhMarkerMessage content

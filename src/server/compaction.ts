@@ -60,6 +60,14 @@ const SUMMARIZER_SYSTEM_PROMPT =
 /** The one-shot summary call: zero tools, one turn, text out. The engine
  *  is the chat's own conversation engine (owner ruling: the session's
  *  model writes its own summary). Injectable for tests. */
+
+/** The read session's document tree for the compaction summary, or null
+ *  before the first document exists. */
+function readDocumentTreeText(chatStore: ChatStore, chatId: string): string | null {
+	const docs = chatStore.readDocuments(chatId);
+	return docs.document || (docs.documents?.length ?? 0) > 0 ? studyDocumentTreeText(docs) : null;
+}
+
 export type Summarizer = (prompt: string, engine: PiEngine) => Promise<{ summary: string; usage: Usage }>;
 
 /** The production summarizer over the sub-agent seam. */
@@ -239,11 +247,12 @@ async function compact(deps: CompactionDeps, chatId: string): Promise<void> {
 		spanText: fullSpan,
 		planTreeText: planTreeToText(record.tree, messages),
 		kind: deps.kind,
-		// READ sessions (2026-11-04; deeper tree 2026-11-12): the guides
-		// themselves are in the record, so the summary carries the document
-		// tree (titles, section ids, suggestions, related links), and the
-		// future agent calls read_document for the full text.
-		documentText: deps.kind === "read" && record.document ? studyDocumentTreeText(record) : null,
+		// READ sessions (2026-11-04; deeper tree 2026-11-12; per-document
+		// files 2026-11-15): the guides live beside the record, so the summary
+		// carries the document tree (titles, section ids, suggestions,
+		// related links), and the future agent calls read_document for the
+		// full text.
+		documentText: deps.kind === "read" ? readDocumentTreeText(deps.chatStore, chatId) : null,
 	});
 
 	emit("compaction-changed", { chatId, running: true });

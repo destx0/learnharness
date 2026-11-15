@@ -5,8 +5,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { ReadDocumentView, documentWriteInFlight, readMinutes } from "../components/read-pane.tsx";
-import type { StudyDocument } from "../src/core/contracts.ts";
+import { ReadDocumentView, documentWriteInFlight, isSkeletonDocument, mergeReadDocuments, readMinutes } from "../components/read-pane.tsx";
+import type { StudyDocument, StudyWriterView } from "../src/core/contracts.ts";
+import { studyDocumentSkeleton } from "../src/core/study-document.ts";
 
 /**
  * THE READING PANE (read sessions, 2026-11-04; deeper tree 2026-11-12):
@@ -183,6 +184,79 @@ describe("ReadDocumentView — the reading surface", () => {
 		assert.ok(html.includes("Topic graph"));
 		assert.ok(html.includes(">Eigenvectors<"));
 		assert.ok(html.includes(">Linear maps<"));
+	});
+});
+
+const SEEDED: StudyDocument = {
+	...ROADMAP_ROOT,
+	sections: [
+		ROADMAP_ROOT.sections[0]!,
+		{ ...ROADMAP_ROOT.sections[1]!, body: "Summary not written yet.", seed: true },
+	],
+};
+
+function writer(kind: StudyWriterView["kind"], status: StudyWriterView["status"], sectionId?: string, error?: string): StudyWriterView {
+	return { id: `w_${kind}`, key: `k_${kind}`, kind, documentId: "root", ...(sectionId ? { sectionId } : {}), status, label: kind, ...(error ? { error } : {}) };
+}
+
+describe("ReadDocumentView — lazy summaries, writers and handoffs (2026-11-15)", () => {
+	it("renders a seed topic as its waiting state, never its placeholder body", () => {
+		const html = render([SEEDED]);
+		assert.ok(html.includes('data-state="seed"'));
+		assert.ok(html.includes("The summary is written when you open this topic."));
+		assert.ok(!html.includes("Summary not written yet."));
+		assert.ok(html.includes("Selector"), "the subtopic cards stay");
+	});
+
+	it("shows a running summary writer and a failed one with Retry", () => {
+		const writing = render([SEEDED], "root", { writers: [writer("summary", "running", "components")] });
+		assert.ok(writing.includes('data-state="writing"'));
+		assert.ok(writing.includes("Writing the summary…"));
+		const failed = render([SEEDED], "root", { writers: [writer("summary", "failed", "components", "The writer stopped before writing the summary.")] });
+		assert.ok(failed.includes('data-state="failed"'));
+		assert.ok(failed.includes("The writer stopped before writing the summary."));
+		assert.ok(failed.includes(">Retry<"));
+	});
+
+	it("lists the open document's sections in a desktop contents rail", () => {
+		const html = render([ROOT]);
+		assert.ok(html.includes('data-testid="read-pane-rail"'));
+		assert.ok(html.includes("lg:block"));
+	});
+
+	it("offers Teach me on written chapters only, and save-to-graph for a written document", () => {
+		const html = render([SEEDED]);
+		assert.equal((html.match(/data-testid="read-section-teach"/g) ?? []).length, 1, "the Overview only — not the seed topic");
+		assert.ok(html.includes('data-testid="read-pane-save-graph"'));
+		const empty = render([{ ...ROOT, sections: [{ ...ROOT.sections[0]!, seed: true }] }]);
+		assert.ok(!empty.includes('data-testid="read-pane-save-graph"'), "nothing written yet: nothing to save");
+	});
+
+	it("lets a chapter without questions ask for some, and shows a questions writer", () => {
+		const html = render([ROOT]);
+		assert.ok(html.includes('data-testid="read-section-questions-empty"'));
+		assert.ok(html.includes("Add self-check questions"));
+		const busy = render([ROOT], "root", { writers: [writer("questions", "running", "maps")] });
+		assert.ok(busy.includes("Writing questions…"));
+	});
+
+	it("shows the writer count in the header while several write the open document", () => {
+		const html = render([SEEDED], "root", { writers: [writer("summary", "running", "components"), { ...writer("subtopics", "running", "components"), id: "w_2", key: "k_2" }] });
+		assert.ok(html.includes("Writing 2…"));
+	});
+});
+
+describe("skeleton merging", () => {
+	it("keeps a cached full document while its revision is current", () => {
+		const cache = new Map<string, StudyDocument>();
+		const [first] = mergeReadDocuments([ROOT], cache);
+		assert.equal(first, ROOT);
+		const skeleton = studyDocumentSkeleton(ROOT);
+		assert.ok(isSkeletonDocument(skeleton));
+		assert.equal(mergeReadDocuments([skeleton], cache)[0], ROOT, "same revision: the full copy stays");
+		const newer = studyDocumentSkeleton({ ...ROOT, revision: ROOT.revision + 1 });
+		assert.ok(isSkeletonDocument(mergeReadDocuments([newer], cache)[0]!), "a newer revision drops the stale full copy");
+		assert.equal(cache.has("root"), false);
 	});
 });
 

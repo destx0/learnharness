@@ -48,6 +48,8 @@ export { fileAccessConfigurationError } from "./file-access.ts";
 export * from "./turn-liveness.ts";
 export * from "./turn-runs.ts";
 export * from "./read-documents.ts";
+export * from "./read-routes.ts";
+export * from "./read-writers.ts";
 export * from "./roadmaps.ts";
 export * from "./dismissal-park.ts";
 export * from "./compaction.ts";

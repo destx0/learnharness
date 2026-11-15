@@ -52,6 +52,9 @@ function fakeStore(initial: ChatRecord) {
 				current = { ...current, documents };
 			}
 		},
+		readDocuments: () => ({ ...(current.document ? { document: current.document } : {}), documents: current.documents ?? [] }),
+		getDocument: (_id: string, documentId: string) =>
+			(documentId === "root" ? current.document : current.documents?.find((doc) => doc.id === documentId)) ?? null,
 		saveReadingDocumentId: (_id: string, readingDocumentId: string) => {
 			current = { ...current, readingDocumentId };
 		},
@@ -62,13 +65,14 @@ function fakeStore(initial: ChatRecord) {
 const jobStore = {} as JobStore;
 const spawn = () => {};
 
-function toolsOf(store: ChatStore) {
+function toolsOf(store: ChatStore, defaultDocumentId?: string) {
 	return createReadTools({
 		chatId: "c_read",
 		chatStore: store,
 		jobStore,
 		spawn,
 		searchAvailable: () => true,
+		...(defaultDocumentId ? { defaultDocumentId } : {}),
 	});
 }
 
@@ -104,6 +108,7 @@ describe("the read agent's tool registry", () => {
 		const { store } = fakeStore(record());
 		const keys = Object.keys(toolsOf(store)).sort();
 		assert.deepEqual(keys, [
+			"add_questions",
 			"describe_subtopics",
 			"edit_document",
 			"find",
@@ -243,7 +248,9 @@ describe("the read agent's tool registry", () => {
 		);
 		store.saveDocument("c_read", child);
 		store.saveReadingDocumentId("c_read", "doc_eigen");
-		const edited = await tools[EDIT_DOCUMENT_TOOL]!.execute("call_3", {
+		// The next turn pins the child (the document open when it started).
+		const childTurn = toolsOf(store, "doc_eigen");
+		const edited = await childTurn[EDIT_DOCUMENT_TOOL]!.execute("call_3", {
 			title: "Eigenvectors",
 			sections: [{ id: "idea", heading: "The idea", body: "A vector that only scales." }],
 		} as never);
@@ -251,6 +258,58 @@ describe("the read agent's tool registry", () => {
 		assert.equal(get().document?.sections.length, 1);
 		assert.equal(get().document?.sections[0]?.id, "maps");
 		assert.equal(get().documents?.[0]?.title, "Eigenvectors");
+	});
+
+	it("keeps editing the turn's pinned document when the learner navigates mid-turn", async () => {
+		const { store, get } = fakeStore(record());
+		const tools = toolsOf(store, "root");
+		await tools[EDIT_DOCUMENT_TOOL]!.execute("call_1", {
+			title: "Linear algebra",
+			sections: [{ id: "maps", heading: "Linear maps", body: "A map preserves structure.", suggestions: [{ id: "eigen", heading: "Eigenvectors", blurb: "Fixed." }] }],
+		} as never);
+		const { createChildStudyDocument } = await import("../src/core/study-document.ts");
+		store.saveDocument("c_read", createChildStudyDocument(get(), "root", "maps", "eigen", "doc_eigen"));
+		// The learner opens the child while this turn is still writing.
+		store.saveReadingDocumentId("c_read", "doc_eigen");
+		await tools[EDIT_DOCUMENT_TOOL]!.execute("call_2", {
+			sections: [{ id: "spaces", heading: "Vector spaces", body: "Where vectors live." }],
+		} as never);
+		assert.deepEqual(get().document?.sections.map((section) => section.id), ["maps", "spaces"]);
+		assert.equal(get().documents?.[0]?.sections.length, 0);
+	});
+
+	it("appends self-check questions without resending the old ones", async () => {
+		const { store, get } = fakeStore(record());
+		const tools = toolsOf(store);
+		await tools[EDIT_DOCUMENT_TOOL]!.execute("call_1", {
+			title: "Linear algebra",
+			sections: [{ id: "maps", heading: "Linear maps", body: "A map.", questions: [{ id: "q1", question: "Q1?", answer: "A1." }] }],
+		} as never);
+		const added = await tools.add_questions!.execute("call_2", {
+			sectionId: "maps",
+			questions: [{ id: "q2", question: "Q2?", answer: "A2." }, { id: "q3", question: "Q3?", answer: "A3." }],
+		} as never);
+		assert.equal((added.details as { ok?: boolean }).ok, true);
+		assert.deepEqual(get().document?.sections[0]?.questions?.map((q) => q.id), ["q1", "q2", "q3"]);
+		const duplicate = await tools.add_questions!.execute("call_3", {
+			sectionId: "maps",
+			questions: [{ id: "q1", question: "Again?", answer: "No." }],
+		} as never);
+		assert.equal((duplicate.details as { ok?: boolean }).ok, false);
+		assert.equal(get().document?.sections[0]?.questions?.[0]?.question, "Q1?");
+	});
+
+	it("registers the graph-map reader only when the graph gate passes a store", () => {
+		const { store } = fakeStore(record());
+		const gated = createReadTools({
+			chatId: "c_read",
+			chatStore: store,
+			jobStore,
+			spawn,
+			graphStore: {} as never,
+		});
+		assert.ok(gated.list_sessions && gated.list_propositions);
+		assert.equal(toolsOf(store).list_sessions, undefined);
 	});
 
 	it("returns validation problems to the model without writing", async () => {

@@ -88,6 +88,7 @@ export interface LhMarkerMessage {
 		| "side-question"
 		| "side-question-told"
 		| "read-context"
+		| "read-chapter"
 		| "read-suggest"
 		| "read-deeper"
 		| "read-questions";
@@ -410,29 +411,14 @@ export function newProblemDismissedMarker(problemCallId: string): LhMarkerMessag
 	};
 }
 
-// ─── read-session navigation markers (deeper tree, 2026-11-12) ─────────────
+// ─── read-session markers (deeper tree, 2026-11-12) ─────────────────────────
 //
-// The learner's reads and clicks are session context, not chat speech:
-// UI-hidden markers carrying exact ids. The model sees their content; the
-// transcript drops them (core/view.ts has no projection for these types).
-
-export interface ReadSuggestDetails {
-	documentId: string;
-	documentTitle: string;
-	sectionId: string;
-	sectionHeading: string;
-}
-
-export interface ReadQuestionsDetails extends ReadSuggestDetails {}
-
-export interface ReadDeeperDetails extends ReadSuggestDetails {
-	topicId: string;
-	topicHeading: string;
-	topicBlurb: string;
-	childDocumentId: string;
-	/** Imported-roadmap context for the writer (subtopics, track, etc.). */
-	roadmapContext?: string;
-}
+// Session context, not chat speech: UI-hidden markers the model reads and
+// the transcript drops (core/view.ts has no projection for these types).
+// "read-suggest" / "read-deeper" / "read-questions" were the 2026-11-12
+// click turns; clicks queue background writers since 2026-11-15, so no
+// builder creates them any more, but old transcripts still carry them and
+// the union keeps them readable.
 
 /** Which document the learner is reading, for ordinary chat steering. */
 export function newReadContextMessage(documentId: string, title: string, roadmapSeeded = false): LhMarkerMessage {
@@ -440,48 +426,39 @@ export function newReadContextMessage(documentId: string, title: string, roadmap
 		id: newMessageId(),
 		role: "custom",
 		customType: "read-context",
-		content: `[Session context] The learner is now reading the study document "${title}" (${documentId}). Unless they explicitly name another document, edit and discuss this one; call read_document with its id when you need the text.${roadmapSeeded ? " This document is a roadmap-seeded starting graph: keep its structure and suggestions, do not write a blank first version over it." : ""}`,
+		content: `[Session context] The learner is now reading the study document "${title}" (${documentId}). Unless they explicitly name another document, edit and discuss this one; call read_document with its id when you need the text.${roadmapSeeded ? " This document is seeded from a roadmap: keep every section and roadmap subtopic. Topic sections marked [summary not written yet] are filled by background writers when the learner opens them; write one yourself only when the learner asks." : ""}`,
 		display: false,
 		details: { documentId, title },
 		timestamp: Date.now(),
 	};
 }
 
-/** "Go deeper" pressed: suggest directions, do not write a child yet. */
-export function newReadSuggestMessage(details: ReadSuggestDetails): LhMarkerMessage {
+/** "Teach this chapter" (2026-11-15): a teach session started from a read
+ *  chapter carries the chapter as hidden context BEFORE the learner's
+ *  opening message, so the teacher knows what was just read. The prober
+ *  still probes — reading a chapter is not holding it. Hidden in the
+ *  transcript (the opening "Teach me …" bubble is the visible face). */
+export function newReadChapterMessage(input: {
+	chatId: string;
+	documentId: string;
+	sectionId: string;
+	documentTitle: string;
+	heading: string;
+	body: string;
+}): LhMarkerMessage {
 	return {
 		id: newMessageId(),
 		role: "custom",
-		customType: "read-suggest",
-		content: `[Session context] The learner asked for deeper-topic directions for the chapter "${details.sectionHeading}" (${details.sectionId}) in the study document "${details.documentTitle}" (${details.documentId}). Read that chapter with read_document(documentId="${details.documentId}", sectionId="${details.sectionId}") and call suggest_deeper with 2–4 genuinely deeper directions. Do not write a child document yet — the learner picks a direction first.`,
+		customType: "read-chapter",
+		content: [
+			`[Session context] The learner started this session from a chapter they read in a reading session: "${input.heading}" (from the study guide "${input.documentTitle}"). The chapter's text follows. Treat it as what they have READ, not what they hold: probe as usual, and build the lesson toward understanding it.`,
+			"",
+			"---",
+			"",
+			input.body.trim(),
+		].join("\n"),
 		display: false,
-		details,
-		timestamp: Date.now(),
-	};
-}
-
-/** "Generate more questions" in a chapter's self-check accordion. */
-export function newReadQuestionsMessage(details: ReadQuestionsDetails): LhMarkerMessage {
-	return {
-		id: newMessageId(),
-		role: "custom",
-		customType: "read-questions",
-		content: `[Session context] The learner asked for more self-check questions for the chapter "${details.sectionHeading}" (${details.sectionId}) in "${details.documentTitle}" (${details.documentId}). Read that section, then add 2–3 NEW questions with model answers to the existing set with edit_document. Keep every existing question and answer, do not duplicate, and do not rewrite the section body.`,
-		display: false,
-		details,
-		timestamp: Date.now(),
-	};
-}
-
-/** A suggestion was chosen: the server already created the pending child. */
-export function newReadDeeperMessage(details: ReadDeeperDetails): LhMarkerMessage {
-	return {
-		id: newMessageId(),
-		role: "custom",
-		customType: "read-deeper",
-		content: `[Session context] The learner chose the deeper direction "${details.topicHeading}" from the chapter "${details.sectionHeading}" (${details.sectionId}) in "${details.documentTitle}" (${details.documentId}). ${details.topicBlurb ? `The direction: ${details.topicBlurb} ` : ""}The active document is now the pending child "${details.topicHeading}" (${details.childDocumentId}); it has no sections yet. Read the parent chapter first with read_document(documentId="${details.documentId}", sectionId="${details.sectionId}"), then write the child with edit_document and documentId="${details.childDocumentId}" — one level deeper than the parent chapter, not a repeat of it. Give it real sections, starting from what the reader already learned. Add related links to existing documents when genuinely related from list_documents.${details.roadmapContext ? `\n\n${details.roadmapContext}` : ""}`,
-		display: false,
-		details,
+		details: { chatId: input.chatId, documentId: input.documentId, sectionId: input.sectionId, heading: input.heading },
 		timestamp: Date.now(),
 	};
 }
@@ -1070,7 +1047,7 @@ export function nativeInputCause(message: AgentMessage, history: readonly AgentM
 	if (message.role === "custom") {
 		if (["probe-handoff", "subagent-steer", "subagent-abort"].includes(message.customType)) return "automatic";
 		if (["practice-thinking", "plugin-problem-submission", "practice-next", "read-suggest", "read-deeper", "read-questions"].includes(message.customType)) return "learner";
-		return ["graph-context", "plan-block", "problem-dismissed", "compaction", "side-question", "side-question-told", "read-context"].includes(message.customType) ? "neutral" : "unrecognizable";
+		return ["graph-context", "plan-block", "problem-dismissed", "compaction", "side-question", "side-question-told", "read-context", "read-chapter"].includes(message.customType) ? "neutral" : "unrecognizable";
 	}
 	if (message.role === "toolResult") {
 		const pluginAnswer = readPluginQuestionAnswer(message.details);

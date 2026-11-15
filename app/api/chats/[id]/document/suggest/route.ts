@@ -1,26 +1,19 @@
-import { handleChatInput, stores } from "@/src/server";
-import { studyDocumentById } from "@/src/core";
+import { bodyString, enqueueReadWriter, readRouteChapter, readRouteContext } from "@/src/server";
 
-/** "Go deeper" pressed on a chapter: start the agent turn that proposes
- *  directions. Suggestions are generated on click (owner 2026-11-12), not
- *  authored with every chapter, so this is the one model call that makes
- *  the chips appear. The turn runs as the usual background object. */
+/** "Refresh directions" on a chapter: a background writer replaces its
+ *  agent-authored deeper directions (roadmap subtopics are kept). Never a
+ *  chat turn, so it runs beside whatever else is writing. */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
 	const { id } = await params;
-	let body: { documentId?: unknown; sectionId?: unknown };
-	try {
-		body = await req.json();
-	} catch {
-		return Response.json({ error: "Invalid JSON body" }, { status: 400 });
-	}
-	const record = stores.chatStore.getChat(id);
-	if (!record) return Response.json({ error: "Not found" }, { status: 404 });
-	if (record.kind !== "read") return Response.json({ error: "Not a reading session" }, { status: 400 });
-	const documentId = typeof body.documentId === "string" ? body.documentId : "";
-	const sectionId = typeof body.sectionId === "string" ? body.sectionId : "";
-	const document = studyDocumentById(record, documentId);
-	if (!document || !document.sections.some((section) => section.id === sectionId)) {
-		return Response.json({ error: "No such chapter" }, { status: 400 });
-	}
-	return handleChatInput(id, { type: "suggest-deeper", documentId: document.id, sectionId });
+	const ctx = await readRouteContext(req, id);
+	if (ctx instanceof Response) return ctx;
+	const chapter = readRouteChapter(ctx.docs, bodyString(ctx.body, "documentId"), bodyString(ctx.body, "sectionId"));
+	if (!chapter) return Response.json({ error: "No such chapter" }, { status: 400 });
+	const queued = enqueueReadWriter(
+		id,
+		{ kind: "directions", documentId: chapter.document.id, sectionId: chapter.section.id },
+		`Directions · ${chapter.section.heading}`,
+		{ retry: true },
+	);
+	return Response.json({ ok: true, ...queued });
 }

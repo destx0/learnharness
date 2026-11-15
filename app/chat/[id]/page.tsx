@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { Chat } from "@/components/chat";
 import { slotsConfigured } from "@/src/core";
-import { compactionInFlight, getChat, isTurnRunning, readSettingsRecord, turnFailure } from "@/src/server";
+import { compactionInFlight, getChat, isTurnRunning, readPaneSnapshot, readSettingsRecord, turnFailure } from "@/src/server";
 
 export const dynamic = "force-dynamic";
 
@@ -19,18 +19,18 @@ export default async function ChatPage({
 	// over the settings record, server-read — the same gate home/new read. The
 	// server's 503 stays the truth; this only decides whether the pill rides.
 	const record = readSettingsRecord();
+	const reading = chat.kind === "read" ? readPaneSnapshot(chat.id) : null;
 	return (
 		<Chat
 			key={chat.id}
 			chatId={chat.id}
 			title={chat.title}
 			kind={chat.kind ?? "teach"}
-			// The living study document (read sessions, 2026-11-04): the
-			// canonical guide rides the record; the pane starts from this and
-			// updates on document-changed.
-			initialDocument={chat.document ?? null}
-			initialDocuments={chat.documents ?? []}
-			initialReadingDocumentId={chat.readingDocumentId ?? null}
+			// The living study documents (read sessions): skeletons plus the
+			// reading document in full; the pane updates on document-changed.
+			initialDocuments={reading?.documents ?? []}
+			initialReadingDocumentId={reading?.readingDocumentId ?? null}
+			initialWriters={reading?.writers ?? []}
 			// Wave D: the record IS native agent history — the client view is
 				// derived app-side (core/view.ts projectView; GET serves the same
 				// native messages).

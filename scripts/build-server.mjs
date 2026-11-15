@@ -112,6 +112,8 @@ for (const asset of [
 	path.join("src", "agent", "prompts", "read", "00-base.md"),
 	path.join("src", "agent", "prompts", "read", "10-doctrine.md"),
 	path.join("src", "agent", "prompts", "read", "20-deeper.md"),
+	// The background document writer (2026-11-15) composes its own base.
+	path.join("src", "agent", "prompts", "read-writer", "00-writer.md"),
 	path.join("src", "agent", "prompts", "side-chat", "00-base.md"),
 	path.join("src", "agent", "prompts", "side-chat", "90-style.md"),
 ]) {

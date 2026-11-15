@@ -43,9 +43,6 @@ import {
 	newNextMessage,
 	newProblemDismissedMarker,
 	newReadContextMessage,
-	newReadDeeperMessage,
-	newReadQuestionsMessage,
-	newReadSuggestMessage,
 	newThinkingMessage,
 	newUserMessage,
 	newMessageId,
@@ -53,7 +50,7 @@ import {
 	pluginQuestionCallsOf,
 	pendingProblemDismissalOf,
 } from "./native-messages.ts";
-import { studyDocumentById, studyDocumentChildForTopic, studyDocumentList, studyDocumentTopic } from "./study-document.ts";
+import { studyDocumentById } from "./study-document.ts";
 import { QUESTION_TOOLS, toolQuestionKind } from "./pending.ts";
 import { isPluginQuestionJson, type JsonValue, type PluginQuestionOccurrence } from "./plugin-questions.ts";
 import { preparePluginProblemSubmissionImages, type PluginProblemSubmissionImages } from "./plugin-submissions.ts";
@@ -82,15 +79,12 @@ export type ChatInput =
 	 *  explicit go-ahead during the between-problems pause — the Next
 	 *  chip or Enter on an empty composer. Practice sessions only, and
 	 *  only with nothing active (mid-problem input rides the dock). */
-	| { type: "next" }
-	/** Read mode's "Go deeper" click: ask the agent for directions under
-	 *  one chapter. The marker carries exact ids; no visible user bubble. */
-	| { type: "suggest-deeper"; documentId: string; sectionId: string }
-	/** Read mode's topic choice: the server has already created the
-	 *  pending child document; this starts the writing turn. */
-	| { type: "go-deeper"; documentId: string; sectionId: string; topicId: string; childDocumentId: string; roadmapContext?: string }
-	/** Read mode's "Generate more questions" click in a self-check block. */
-	| { type: "more-questions"; documentId: string; sectionId: string };
+	| { type: "next" };
+	// Read mode's clicks (go deeper, more questions, fresh directions) are
+	// NOT chat inputs since 2026-11-15: they queue parallel background
+	// writers (server/read-writers.ts). Their 2026-11-12 marker messages
+	// (read-suggest / read-deeper / read-questions) stay recognized in old
+	// transcripts by native-messages.ts.
 
 /** A wake-pipeline steer delivery — same turn composition, server-origin.
  *  Wave C (2026-09-26): the idle wake carries EVERY queued marker as its
@@ -296,23 +290,6 @@ export function parseChatInput(input: unknown): ChatInput {
 		}
 		case "next":
 			return { type: "next" };
-		case "suggest-deeper": {
-			if (typeof i.documentId !== "string" || !i.documentId) throw new ChatInputError("suggest-deeper requires documentId");
-			if (typeof i.sectionId !== "string" || !i.sectionId) throw new ChatInputError("suggest-deeper requires sectionId");
-			return { type: "suggest-deeper", documentId: i.documentId, sectionId: i.sectionId };
-		}
-		case "more-questions": {
-			if (typeof i.documentId !== "string" || !i.documentId) throw new ChatInputError("more-questions requires documentId");
-			if (typeof i.sectionId !== "string" || !i.sectionId) throw new ChatInputError("more-questions requires sectionId");
-			return { type: "more-questions", documentId: i.documentId, sectionId: i.sectionId };
-		}
-		case "go-deeper": {
-			if (typeof i.documentId !== "string" || !i.documentId) throw new ChatInputError("go-deeper requires documentId");
-			if (typeof i.sectionId !== "string" || !i.sectionId) throw new ChatInputError("go-deeper requires sectionId");
-			if (typeof i.topicId !== "string" || !i.topicId) throw new ChatInputError("go-deeper requires topicId");
-			if (typeof i.childDocumentId !== "string" || !i.childDocumentId) throw new ChatInputError("go-deeper requires childDocumentId");
-			return { type: "go-deeper", documentId: i.documentId, sectionId: i.sectionId, topicId: i.topicId, childDocumentId: i.childDocumentId };
-		}
 		default:
 			throw new ChatInputError(`unknown input type: ${String(i.type)}`);
 	}
@@ -408,56 +385,6 @@ export function inputAppends(
 				throw new ChatInputError("next input requires no active problem");
 			}
 			return [...dismissalConclusion(record), newNextMessage()];
-		}
-		case "suggest-deeper": {
-			if (record.kind !== "read") throw new ChatInputError("suggest-deeper input is a reading-session affordance");
-			const document = studyDocumentById(record, input.documentId);
-			const section = document?.sections.find((s) => s.id === input.sectionId);
-			if (!document || !section) {
-				throw new ChatInputError(
-					`suggest-deeper targets no chapter. Current ids: ${studyDocumentList(record).map((doc) => doc.id).join(", ") || "(none)"}`,
-				);
-			}
-			return [newReadSuggestMessage({
-				documentId: document.id,
-				documentTitle: document.title,
-				sectionId: section.id,
-				sectionHeading: section.heading,
-			})];
-		}
-		case "more-questions": {
-			if (record.kind !== "read") throw new ChatInputError("more-questions input is a reading-session affordance");
-			const document = studyDocumentById(record, input.documentId);
-			const section = document?.sections.find((candidate) => candidate.id === input.sectionId);
-			if (!document || !section) {
-				throw new ChatInputError("more-questions targets no chapter");
-			}
-			return [newReadQuestionsMessage({
-				documentId: document.id,
-				documentTitle: document.title,
-				sectionId: section.id,
-				sectionHeading: section.heading,
-			})];
-		}
-		case "go-deeper": {
-			if (record.kind !== "read") throw new ChatInputError("go-deeper input is a reading-session affordance");
-			const document = studyDocumentById(record, input.documentId);
-			const found = document ? studyDocumentTopic(document, input.sectionId, input.topicId) : null;
-			const child = studyDocumentChildForTopic(record, input.documentId, input.sectionId, input.topicId);
-			if (!document || !found || !child || child.id !== input.childDocumentId) {
-				throw new ChatInputError("go-deeper targets no current suggestion or pending child document");
-			}
-			return [newReadDeeperMessage({
-				documentId: document.id,
-				documentTitle: document.title,
-				sectionId: found.section.id,
-				sectionHeading: found.section.heading,
-				topicId: found.topic.id,
-				topicHeading: found.topic.heading,
-				topicBlurb: found.topic.blurb,
-				childDocumentId: child.id,
-				...(input.roadmapContext ? { roadmapContext: input.roadmapContext } : {}),
-			})];
 		}
 	}
 }

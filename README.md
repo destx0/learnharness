@@ -29,7 +29,7 @@ Instead of just giving you an explanation, it uses your answers and thinking to 
 3. **Teach.** Each step builds on something you already understand. You predict, get an explanation, and check your understanding. Confusions are repaired before anything is built on them. The aim is for the goal to feel obviously true, not merely familiar.
 4. **Practice.** Separate sessions pose varied problems that require the right knowledge to come to mind without being named first. Problems and hints adapt to your reasoning.
 
-**Read.** A third mode for the material itself: the agent writes a living study document in a dedicated reading pane — a summary first, then expansions you steer through chat. No quiz, no probing; read the guide, ask for depth, and keep it as a reference. See [docs/read-mode.md](docs/read-mode.md).
+**Read.** A third mode for the material itself: the agent writes a living study document in a reading pane — a summary first, then expansions you steer through chat. Open any direction to drill into a deeper document; several write in parallel in the background. Start from a roadmap.sh roadmap and each topic is written as you open it. No quiz, no probing — but any chapter can start a Teach session, and any document can be saved to your knowledge graph. See [docs/read-mode.md](docs/read-mode.md).
 
 **Think out loud.** The thinking fields let you explain your reasoning, uncertainties, and reactions in your own words. This is how the agent gets a detailed picture rather than just a record of right and wrong answers. You can type or use dictation.
 

@@ -13,9 +13,9 @@ import { createHash } from "node:crypto";
 import { PATHS } from "../../config.ts";
 import { emit } from "../core/events.ts";
 import type { ChatStore } from "../core/ports.ts";
-import type { ChatRecord, ChatSettings, ChatSummary, ExtractionRunUsage, ImageSnapshot, PlanTree, SideChatThread, StudyDocument, TurnUsage } from "../core/contracts.ts";
+import type { ChatRecord, ChatSettings, ChatSummary, ExtractionRunUsage, ImageSnapshot, PlanTree, SideChatThread, StudyDocument, StudyDocumentSet, TurnUsage } from "../core/contracts.ts";
 import { CURRENT_CHAT_VERSION } from "../core/contracts.ts";
-import { STUDY_ROOT_DOCUMENT_ID } from "../core/study-document.ts";
+import { STUDY_DOCUMENT_ID_RE, STUDY_ROOT_DOCUMENT_ID } from "../core/study-document.ts";
 import type { LhMessage } from "../core/native-messages.ts";
 import { activeProblemOf, danglingQuestionOf } from "../core/native-messages.ts";
 import { phaseAt3Lh } from "../core/phases.ts";
@@ -24,6 +24,105 @@ import { removeLeftoverTemps, writeFileAtomicSync } from "./atomic-write.ts";
 function chatFile(id: string): string {
 	if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error(`Invalid chat id: ${id}`);
 	return path.join(/* turbopackIgnore: true */ PATHS.chats, `${id}.json`);
+}
+
+/** Study documents (read sessions, record version 5): one file per
+ *  document under data/chats/<chatId>.docs/, so a document write never
+ *  rewrites the transcript and parallel background writers touch only
+ *  their own file. The directory name never ends in ".json", so the chat
+ *  listing ignores it. */
+function documentsDir(id: string): string {
+	if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error(`Invalid chat id: ${id}`);
+	return path.join(/* turbopackIgnore: true */ PATHS.chats, `${id}.docs`);
+}
+
+function documentFile(id: string, documentId: string): string {
+	if (!STUDY_DOCUMENT_ID_RE.test(documentId)) throw new Error(`Invalid study document id: ${documentId}`);
+	return path.join(/* turbopackIgnore: true */ documentsDir(id), `${documentId}.json`);
+}
+
+/** Parsed-document cache keyed by file path, invalidated by mtime+size:
+ *  tree-wide reads (list_documents, the pane's outline) re-read only what
+ *  changed. Process-global like the event bus (Next gives route entries
+ *  their own module instances). */
+interface CachedDocument { mtimeMs: number; size: number; doc: StudyDocument }
+function documentCache(): Map<string, CachedDocument> {
+	const g = globalThis as typeof globalThis & { __lhStudyDocumentCache?: Map<string, CachedDocument> };
+	return (g.__lhStudyDocumentCache ??= new Map());
+}
+
+function readDocumentFile(file: string): StudyDocument | null {
+	let stat: fs.Stats;
+	try {
+		stat = fs.statSync(/* turbopackIgnore: true */ file);
+	} catch {
+		documentCache().delete(file);
+		return null;
+	}
+	const cached = documentCache().get(file);
+	if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.doc;
+	try {
+		const doc = JSON.parse(fs.readFileSync(/* turbopackIgnore: true */ file, "utf-8")) as StudyDocument;
+		if (!doc || typeof doc.id !== "string" || !Array.isArray(doc.sections)) return null;
+		documentCache().set(file, { mtimeMs: stat.mtimeMs, size: stat.size, doc });
+		return doc;
+	} catch {
+		return null;
+	}
+}
+
+function writeDocumentFile(id: string, document: StudyDocument): void {
+	fs.mkdirSync(documentsDir(id), { recursive: true });
+	const file = documentFile(id, document.id);
+	writeFileAtomicSync(file, JSON.stringify(document, null, "\t"));
+	documentCache().delete(file);
+}
+
+/** Every study document of a session: the root in `document`, deeper
+ *  documents in `documents` (creation order). Callers get fresh objects
+ *  only in the sense that the cache returns the parsed file; treat them as
+ *  read-only — the pure engine always returns new documents. */
+function readDocuments(id: string): StudyDocumentSet {
+	let files: string[];
+	try {
+		files = fs.readdirSync(/* turbopackIgnore: true */ documentsDir(id)).filter((f) => f.endsWith(".json"));
+	} catch {
+		return { documents: [] };
+	}
+	let document: StudyDocument | undefined;
+	const documents: StudyDocument[] = [];
+	for (const file of files) {
+		const doc = readDocumentFile(path.join(/* turbopackIgnore: true */ documentsDir(id), file));
+		if (!doc) continue;
+		if (doc.id === STUDY_ROOT_DOCUMENT_ID) document = doc;
+		else documents.push(doc);
+	}
+	// Creation order: the server mints doc_<base36 time>_… ids, so the id
+	// sorts chronologically; ties fall back to updatedAt.
+	documents.sort((a, b) => a.id.localeCompare(b.id) || a.updatedAt.localeCompare(b.updatedAt));
+	return { ...(document ? { document } : {}), documents };
+}
+
+function getDocument(id: string, documentId: string): StudyDocument | null {
+	if (!STUDY_DOCUMENT_ID_RE.test(documentId)) return null;
+	return readDocumentFile(documentFile(id, documentId));
+}
+
+/** Version 3–4 records carried the documents inline. Move them to files
+ *  (a file that already exists is newer and wins), strip the fields, and
+ *  stamp the record. Idempotent; runs inside getChat's first read. */
+function migrateInlineDocuments(record: ChatRecord): ChatRecord {
+	if (record.document === undefined && record.documents === undefined) return record;
+	const inline = [...(record.document ? [record.document] : []), ...(record.documents ?? [])];
+	for (const doc of inline) {
+		if (!doc.id) doc.id = STUDY_ROOT_DOCUMENT_ID;
+		if (!STUDY_DOCUMENT_ID_RE.test(doc.id)) continue;
+		if (fs.existsSync(/* turbopackIgnore: true */ documentFile(record.id, doc.id))) continue;
+		writeDocumentFile(record.id, doc);
+	}
+	const { document: _document, documents: _documents, ...rest } = record;
+	writeChat(rest);
+	return { ...rest, version: CURRENT_CHAT_VERSION };
 }
 
 /** THE SILENCE LAW (push S6, 2026-10-02): chats-changed announces ONLY
@@ -77,11 +176,13 @@ function getChat(id: string): ChatRecord | null {
 		return null;
 	}
 	const record = parsed as ChatRecord;
-	// Pre-deeper records stored the root document without an id. The id is
-	// structural now (the tree and tool targeting key on it), so normalize
-	// in memory; the next write stamps it.
-	if (record.document && !record.document.id) record.document.id = STUDY_ROOT_DOCUMENT_ID;
-	return record;
+	// Record version 5: inline study documents move to their own files.
+	try {
+		return migrateInlineDocuments(record);
+	} catch (err) {
+		console.error(`[chat ${id}] study-document migration failed:`, err);
+		return record;
+	}
 }
 
 function listChats(): ChatSummary[] {
@@ -92,7 +193,7 @@ function listChats(): ChatSummary[] {
 			.filter((f) => f.endsWith(".json"))
 			.map((f) => getChat(f.slice(0, -5)))
 			.filter((r): r is ChatRecord => r !== null)
-			.map(({ messages, tree, document, documents, readingDocumentId, turns, extractions, imageSnapshots: _imageSnapshots, sideChats: _sideChats, ...summary }) => {
+			.map(({ messages, tree, document: _document, documents: _documents, readingDocumentId, turns, extractions, imageSnapshots: _imageSnapshots, sideChats: _sideChats, ...summary }) => {
 				// Per-record isolation (Wave B): a record whose messages fail the
 				// projection (e.g. pre-Wave-B UIMessage-format scratch — the
 				// zero-back-compat wipe makes these "corrupt") must not blank the
@@ -217,6 +318,13 @@ function deleteChat(id: string): boolean {
 	try {
 		fs.unlinkSync(chatFile(id));
 		removeLeftoverTemps(chatFile(id));
+		try {
+			const dir = documentsDir(id);
+			for (const file of fs.readdirSync(/* turbopackIgnore: true */ dir)) documentCache().delete(path.join(dir, file));
+			fs.rmSync(/* turbopackIgnore: true */ dir, { recursive: true, force: true });
+		} catch {
+			/* no study documents */
+		}
 		emit("chats-changed", {}); // only a real removal — the present-entry law
 		return true;
 	} catch {
@@ -234,23 +342,12 @@ function saveTree(id: string, tree: PlanTree): void {
 	writeChat(record);
 }
 
-/** Persist the living study document (the read agent's document tool). Like
- *  saveTree, an edit is not a separate conversation activity — the turn's
- *  saveMessages carries the update — so updatedAt deliberately stays put.
- *  The root lives in `document`; deeper documents upsert in `documents`. */
+/** Persist one study document to its own file (read sessions). Not
+ *  conversation activity — the record (and its updatedAt) is untouched,
+ *  which is what lets parallel background writers save independently. */
 function saveDocument(id: string, document: StudyDocument): void {
-	const record = getChat(id);
-	if (!record) throw new Error(`Chat not found: ${id}`);
-	if (document.id === STUDY_ROOT_DOCUMENT_ID) {
-		record.document = document;
-	} else {
-		const documents = [...(record.documents ?? [])];
-		const at = documents.findIndex((doc) => doc.id === document.id);
-		if (at >= 0) documents[at] = document;
-		else documents.push(document);
-		record.documents = documents;
-	}
-	writeChat(record);
+	if (!fs.existsSync(/* turbopackIgnore: true */ chatFile(id))) throw new Error(`Chat not found: ${id}`);
+	writeDocumentFile(id, document);
 }
 
 /** View state for chat steering (read sessions): which document the learner
@@ -258,7 +355,7 @@ function saveDocument(id: string, document: StudyDocument): void {
 function saveReadingDocumentId(id: string, documentId: string): void {
 	const record = getChat(id);
 	if (!record) throw new Error(`Chat not found: ${id}`);
-	if (documentId !== STUDY_ROOT_DOCUMENT_ID && !record.documents?.some((doc) => doc.id === documentId)) {
+	if (documentId !== STUDY_ROOT_DOCUMENT_ID && !getDocument(id, documentId)) {
 		throw new Error(`No study document with id "${documentId}"`);
 	}
 	record.readingDocumentId = documentId;
@@ -297,6 +394,8 @@ export const chatStore: ChatStore = {
 	saveImageSnapshot,
 	saveTree,
 	saveDocument,
+	readDocuments,
+	getDocument,
 	saveReadingDocumentId,
 	saveRoadmapSlug,
 	saveSettings,

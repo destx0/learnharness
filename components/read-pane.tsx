@@ -7,8 +7,10 @@ import {
 	BookOpenIcon,
 	ChevronDownIcon,
 	ChevronRightIcon,
+	GraduationCapIcon,
 	HashIcon,
 	HelpCircleIcon,
+	NetworkIcon,
 	PanelLeftIcon,
 	PlusIcon,
 	RefreshCwIcon,
@@ -17,8 +19,10 @@ import {
 	WaypointsIcon,
 	XIcon,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { BrailleSpinner } from "@/components/braille-spinner";
+import { stashOpeningPrompt } from "@/components/opening-prompt";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import { SessionMermaidContext } from "@/components/session-overlay";
 import {
@@ -28,10 +32,14 @@ import {
 	studyDocumentList,
 	studyDocumentStatus,
 	studyDocumentWordCount,
+	studySubtopicPending,
 	STUDY_ROOT_DOCUMENT_ID,
 	type StudyDocument,
+	type StudySection,
 	type StudySectionQuestion,
 	type StudyTopicSuggestion,
+	type StudyWriterKind,
+	type StudyWriterView,
 } from "@/src/core";
 import { cn } from "@/lib/utils";
 import { ReadGraphView } from "./read-graph";
@@ -43,9 +51,14 @@ import { isRoadmapDocument, RoadmapGraphView } from "./read-roadmap-graph";
  * The living study document lives on the ChatRecord; this pane renders it as
  * a navigable reading surface beside the conversation. Data flow:
  *
- *   edit_document / suggest_deeper (server) → saveDocument
+ *   chat turn or background writer → saveDocument (one file per document)
  *   → document-changed event → ReadPane refetches /api/chats/:id/document
- *   → the latest documents render
+ *   → skeletons of every document + the open one in full + writer state
+ *
+ * Every click that needs writing (a deep dive, a roadmap topic's summary,
+ * more questions, fresh directions) queues a parallel background writer
+ * (server/read-writers.ts); `writers` in the payload is their state, and
+ * the pane derives each chapter's writing / failed / Retry face from it.
  *
  * The event is separate from record-changed on purpose: a mid-turn document
  * write must update this pane without touching the client's streaming
@@ -68,6 +81,8 @@ export interface ReadPaneProps {
 	initialDocument: StudyDocument | null;
 	initialDocuments?: StudyDocument[];
 	initialReadingDocumentId?: string | null;
+	/** The session's background writers at page render. */
+	initialWriters?: StudyWriterView[];
 	/** The session title — the pane's fallback title before the first doc. */
 	sessionTitle: string;
 	/** A document edit is currently being written (the live tool card). */
@@ -75,6 +90,44 @@ export interface ReadPaneProps {
 	onClose?: () => void;
 	/** Placement utilities (the Chat owns the main-vs-overlay rule). */
 	className?: string;
+}
+
+/** A skeleton carries structure only (studyDocumentSkeleton): every body
+ *  is empty, which a written section can never be (the engine rejects
+ *  empty bodies). */
+export function isSkeletonDocument(doc: StudyDocument): boolean {
+	return doc.sections.length > 0 && doc.sections.every((section) => section.body === "");
+}
+
+/** Merge a server payload with the full documents already loaded: a
+ *  skeleton whose revision matches a cached full copy keeps the full copy,
+ *  so switching back to a document does not blank it. Pure. */
+export function mergeReadDocuments(
+	incoming: readonly StudyDocument[],
+	cache: Map<string, StudyDocument>,
+): StudyDocument[] {
+	return incoming.map((doc) => {
+		if (!isSkeletonDocument(doc)) {
+			cache.set(doc.id, doc);
+			return doc;
+		}
+		const full = cache.get(doc.id);
+		if (full && full.revision === doc.revision) return full;
+		cache.delete(doc.id);
+		return doc;
+	});
+}
+
+/** The writer working on (or recently failed at) one target, if any. */
+export function writerFor(
+	writers: readonly StudyWriterView[],
+	kind: StudyWriterKind,
+	documentId: string,
+	sectionId?: string,
+): StudyWriterView | undefined {
+	return writers.find((writer) =>
+		writer.kind === kind && writer.documentId === documentId && (sectionId === undefined || writer.sectionId === sectionId),
+	);
 }
 
 function documentList(initialDocument: StudyDocument | null, initialDocuments: readonly StudyDocument[]): StudyDocument[] {
@@ -95,12 +148,20 @@ export function ReadPane({
 	initialDocument,
 	initialDocuments = [],
 	initialReadingDocumentId = null,
+	initialWriters = [],
 	sessionTitle,
 	writing,
 	onClose,
 	className,
 }: ReadPaneProps) {
-	const [documents, setDocuments] = useState<StudyDocument[]>(() => documentList(initialDocument, initialDocuments));
+	const router = useRouter();
+	const fullCache = useRef(new Map<string, StudyDocument>());
+	const [documents, setDocuments] = useState<StudyDocument[]>(() => mergeReadDocuments(documentList(initialDocument, initialDocuments), fullCache.current));
+	const [writers, setWriters] = useState<StudyWriterView[]>(initialWriters);
+	/** Clicks whose writer has not shown up in a payload yet (optimistic). */
+	const [pending, setPending] = useState<StudyWriterView[]>([]);
+	const [graphSaving, setGraphSaving] = useState<string | null>(null);
+	const summaryRequested = useRef(new Set<string>());
 	const [activeId, setActiveId] = useState(() => {
 		const docs = documentList(initialDocument, initialDocuments);
 		if (initialReadingDocumentId && docs.some((doc) => doc.id === initialReadingDocumentId)) return initialReadingDocumentId;
@@ -108,9 +169,6 @@ export function ReadPane({
 	});
 	const [treeOpen, setTreeOpen] = useState(false);
 	const [view, setView] = useState<"read" | "graph">("read");
-	const [suggestingKey, setSuggestingKey] = useState<string | null>(null);
-	const [generatingKey, setGeneratingKey] = useState<string | null>(null);
-	const [moreQuestionsKey, setMoreQuestionsKey] = useState<string | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
 	const [focusSectionId, setFocusSectionId] = useState<string | null>(null);
 	const activeIdRef = useRef(activeId);
@@ -126,16 +184,21 @@ export function ReadPane({
 	const refresh = useCallback(async () => {
 		const request = ++requestRef.current;
 		try {
-			const res = await fetch(`/api/chats/${encodeURIComponent(chatId)}/document`, { cache: "no-store" });
+			const res = await fetch(
+				`/api/chats/${encodeURIComponent(chatId)}/document?documentId=${encodeURIComponent(activeIdRef.current)}`,
+				{ cache: "no-store" },
+			);
 			if (!res.ok) return;
 			const body = (await res.json()) as {
-				document?: StudyDocument | null;
 				documents?: StudyDocument[];
 				readingDocumentId?: string | null;
+				writers?: StudyWriterView[];
 			};
 			if (request !== requestRef.current) return;
-			const next = documentList(body.document ?? null, body.documents ?? []);
+			const next = mergeReadDocuments(body.documents ?? [], fullCache.current);
 			setDocuments(next);
+			setWriters(body.writers ?? []);
+			setPending([]);
 			if (!next.some((doc) => doc.id === activeIdRef.current)) {
 				const fallback = body.readingDocumentId && next.some((doc) => doc.id === body.readingDocumentId)
 					? body.readingDocumentId
@@ -157,16 +220,10 @@ export function ReadPane({
 
 	useServerEvent("document-changed", (p) => {
 		if (p.chatId !== chatId) return;
-		setSuggestingKey(null);
-		setGeneratingKey(null);
-		setMoreQuestionsKey(null);
 		scheduleRefresh();
 	});
 	useServerEvent("turn-settled", (p) => {
 		if (p.chatId !== chatId) return;
-		setSuggestingKey(null);
-		setGeneratingKey(null);
-		setMoreQuestionsKey(null);
 		void refresh();
 	});
 	useServerResync(() => {
@@ -200,6 +257,56 @@ export function ReadPane({
 	const record = useMemo(() => recordOf(documents), [documents]);
 	const active = studyDocumentById(record, activeId) ?? record.document;
 	const canGoDeeper = active ? studyDocumentCanGoDeeper(record, active.id) : false;
+	const visibleWriters = useMemo(
+		() => [...writers, ...pending.filter((entry) => !writers.some((writer) => writer.key === entry.key && writer.status !== "failed"))],
+		[writers, pending],
+	);
+	// The open document arrived as a skeleton (switched to it from the
+	// tree or a card): fetch it whole.
+	const activeIsSkeleton = active ? isSkeletonDocument(active) : false;
+	useEffect(() => {
+		if (activeIsSkeleton) void refresh();
+	}, [activeIsSkeleton, activeId, refresh]);
+
+	/** A click is in flight until its writer shows up in a payload. */
+	const markPending = (kind: StudyWriterKind, documentId: string, sectionId?: string, topicId?: string) => {
+		const key = `pending|${kind}|${documentId}|${sectionId ?? ""}|${topicId ?? ""}`;
+		setPending((current) => current.some((entry) => entry.key === key) ? current : [...current, {
+			id: key,
+			key,
+			kind,
+			documentId,
+			...(sectionId ? { sectionId } : {}),
+			...(topicId ? { topicId } : {}),
+			status: "queued",
+			label: "",
+		}]);
+		return key;
+	};
+	const clearPending = (key: string) => setPending((current) => current.filter((entry) => entry.key !== key));
+
+	/** POST one writer request; a refusal clears the optimistic state. */
+	const requestWriter = async (path: string, body: Record<string, unknown>, key: string, failure: string) => {
+		setNotice(null);
+		try {
+			const res = await fetch(`/api/chats/${encodeURIComponent(chatId)}/document/${path}`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(body),
+			});
+			const payload = (await res.json().catch(() => ({}))) as { error?: string; childDocument?: StudyDocument | null };
+			if (!res.ok) {
+				setNotice(payload.error ?? failure);
+				clearPending(key);
+				return null;
+			}
+			return payload;
+		} catch {
+			setNotice("Could not reach the server.");
+			clearPending(key);
+			return null;
+		}
+	};
 
 	const openDocument = (documentId: string, sectionId?: string) => {
 		if (!documents.some((doc) => doc.id === documentId)) return;
@@ -210,80 +317,84 @@ export function ReadPane({
 		setTreeOpen(false);
 	};
 
-	const suggest = async (documentId: string, sectionId: string) => {
-		const key = `${documentId}:${sectionId}`;
-		if (suggestingKey || generatingKey) return;
-		setSuggestingKey(key);
-		setNotice(null);
-		try {
-			const res = await fetch(`/api/chats/${encodeURIComponent(chatId)}/document/suggest`, {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ documentId, sectionId }),
-			});
-			if (!res.ok) {
-				const body = (await res.json().catch(() => ({}))) as { error?: string };
-				setNotice(body.error ?? "Could not start the deeper-topic suggestions.");
-				setSuggestingKey(null);
-			}
-		} catch {
-			setNotice("Could not reach the server.");
-			setSuggestingKey(null);
-		}
+	const suggest = (documentId: string, sectionId: string) => {
+		const key = markPending("directions", documentId, sectionId);
+		void requestWriter("suggest", { documentId, sectionId }, key, "Could not start new directions.");
 	};
 
 	const goDeeper = async (documentId: string, sectionId: string, topicId: string) => {
-		if (suggestingKey || generatingKey) return;
-		setGeneratingKey(`${documentId}:${sectionId}:${topicId}`);
-		setNotice(null);
-		try {
-			const res = await fetch(`/api/chats/${encodeURIComponent(chatId)}/document/deeper`, {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ documentId, sectionId, topicId }),
-			});
-			const body = (await res.json().catch(() => ({}))) as { error?: string; childDocument?: StudyDocument | null };
-			if (!res.ok) {
-				setNotice(body.error ?? "Could not start this topic.");
-				setGeneratingKey(null);
-				return;
-			}
-			if (body.childDocument) {
-				const child = body.childDocument;
-				setDocuments((current) => current.some((doc) => doc.id === child.id)
-					? current.map((doc) => doc.id === child.id ? child : doc)
-					: [...current, child]);
-				setView("read");
-				setFocusSectionId(null);
-				setActiveId(child.id);
-				setTreeOpen(false);
-			}
-			setGeneratingKey(null);
-		} catch {
-			setNotice("Could not reach the server.");
-			setGeneratingKey(null);
+		const key = markPending("deep-dive", documentId, sectionId, topicId);
+		const body = await requestWriter("deeper", { documentId, sectionId, topicId }, key, "Could not start this topic.");
+		clearPending(key);
+		const child = body?.childDocument;
+		if (child) {
+			setDocuments((current) => current.some((doc) => doc.id === child.id)
+				? current.map((doc) => doc.id === child.id ? child : doc)
+				: [...current, child]);
+			setView("read");
+			setFocusSectionId(null);
+			setActiveId(child.id);
+			setTreeOpen(false);
 		}
 	};
 
-	const moreQuestions = async (documentId: string, sectionId: string) => {
-		const key = `${documentId}:${sectionId}`;
-		if (moreQuestionsKey) return;
-		setMoreQuestionsKey(key);
+	const moreQuestions = (documentId: string, sectionId: string) => {
+		const key = markPending("questions", documentId, sectionId);
+		void requestWriter("questions", { documentId, sectionId }, key, "Could not generate more questions.");
+	};
+
+	/** A roadmap topic's lazy summary: requested once per mount when the
+	 *  learner opens the section (the server dedupes too). A remembered
+	 *  failure is not re-fired automatically; Retry passes `retry`. */
+	const requestSummary = (documentId: string, sectionId: string, retry = false) => {
+		const once = `${documentId}|${sectionId}`;
+		if (!retry) {
+			if (summaryRequested.current.has(once)) return;
+			if (writerFor(visibleWriters, "summary", documentId, sectionId)) return;
+		}
+		summaryRequested.current.add(once);
+		const key = markPending("summary", documentId, sectionId);
+		void requestWriter("summary", { documentId, sectionId, ...(retry ? { retry: true } : {}) }, key, "Could not start the summary.");
+	};
+
+	/** "Teach this chapter": a new Teach session that carries the chapter as
+	 *  hidden context and opens on "Teach me <heading>". */
+	const teachChapter = async (documentId: string, section: StudySection) => {
 		setNotice(null);
+		const prompt = `Teach me ${section.heading}`;
 		try {
-			const res = await fetch(`/api/chats/${encodeURIComponent(chatId)}/document/questions`, {
+			const res = await fetch("/api/chats", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ documentId, sectionId }),
+				body: JSON.stringify({ title: section.heading, readChapter: { chatId, documentId, sectionId: section.id } }),
 			});
-			if (!res.ok) {
-				const body = (await res.json().catch(() => ({}))) as { error?: string };
-				setNotice(body.error ?? "Could not generate more questions.");
-				setMoreQuestionsKey(null);
-			}
+			const body = (await res.json().catch(() => ({}))) as { id?: unknown };
+			if (!res.ok || typeof body.id !== "string") throw new Error("create");
+			if (!stashOpeningPrompt(body.id, prompt)) throw new Error("stash");
+			router.push(`/chat/${body.id}`);
+		} catch {
+			setNotice("Could not start a teaching session for this chapter.");
+		}
+	};
+
+	/** "Save to graph": extract the open document into the knowledge graph. */
+	const saveToGraph = async (documentId: string) => {
+		setNotice(null);
+		setGraphSaving(documentId);
+		try {
+			const res = await fetch(`/api/chats/${encodeURIComponent(chatId)}/document/graph`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ documentId }),
+			});
+			const body = (await res.json().catch(() => ({}))) as { error?: string };
+			setNotice(res.ok
+				? "Saving this document to your knowledge graph. Progress shows in Background agents."
+				: body.error ?? "Could not save this document to the graph.");
 		} catch {
 			setNotice("Could not reach the server.");
-			setMoreQuestionsKey(null);
+		} finally {
+			setGraphSaving(null);
 		}
 	};
 
@@ -319,15 +430,18 @@ export function ReadPane({
 			treeOpen={treeOpen}
 			focusSectionId={focusSectionId}
 			initialScrollTop={scrollTops.current.get(active?.id ?? activeId) ?? 0}
-			suggestingKey={suggestingKey}
-			moreQuestionsKey={moreQuestionsKey}
+			writers={visibleWriters}
+			graphSaving={graphSaving !== null}
 			notice={notice}
 			canGoDeeper={canGoDeeper}
 			onToggleTree={() => setTreeOpen((open) => !open)}
 			onOpenDocument={openDocument}
-			onSuggest={(documentId, sectionId) => void suggest(documentId, sectionId)}
+			onSuggest={suggest}
 			onGoDeeper={(documentId, sectionId, topicId) => void goDeeper(documentId, sectionId, topicId)}
-			onMoreQuestions={(documentId, sectionId) => void moreQuestions(documentId, sectionId)}
+			onMoreQuestions={moreQuestions}
+			onRequestSummary={requestSummary}
+			onTeachChapter={(documentId, section) => void teachChapter(documentId, section)}
+			onSaveToGraph={(documentId) => void saveToGraph(documentId)}
 			onRetryDocument={retryDocument}
 			onRemoveRelated={(documentId, targetDocumentId, targetSectionId) => void removeRelated(documentId, targetDocumentId, targetSectionId)}
 			onOpenGraph={() => setView("graph")}
@@ -338,6 +452,8 @@ export function ReadPane({
 		/>
 	);
 }
+
+const WRITE_TOOL_PARTS = new Set(["tool-edit_document", "tool-suggest_deeper", "tool-describe_subtopics", "tool-add_questions"]);
 
 /** Is a document edit being written right now? The live tool card's state
  *  is the signal — not the turn's busy flag: the agent may be answering a
@@ -352,7 +468,7 @@ export function documentWriteInFlight(
 		const message = messages[mi];
 		if (message?.role !== "assistant") continue;
 		for (const part of message.parts ?? []) {
-			if ((part.type === "tool-edit_document" || part.type === "tool-suggest_deeper") && (part.state === "input-streaming" || part.state === "input-available")) {
+			if (WRITE_TOOL_PARTS.has(part.type) && (part.state === "input-streaming" || part.state === "input-available")) {
 				return true;
 			}
 		}
@@ -374,8 +490,10 @@ export interface ReadDocumentViewProps {
 	treeOpen?: boolean;
 	focusSectionId?: string | null;
 	initialScrollTop?: number;
-	suggestingKey?: string | null;
-	moreQuestionsKey?: string | null;
+	/** Background writers (queued / running / recently failed). */
+	writers?: readonly StudyWriterView[];
+	/** A save-to-graph request is in flight. */
+	graphSaving?: boolean;
 	notice?: string | null;
 	canGoDeeper?: boolean;
 	onToggleTree?: () => void;
@@ -383,6 +501,10 @@ export interface ReadDocumentViewProps {
 	onSuggest?: (documentId: string, sectionId: string) => void;
 	onGoDeeper?: (documentId: string, sectionId: string, topicId: string) => void;
 	onMoreQuestions?: (documentId: string, sectionId: string) => void;
+	/** Open-triggered (or Retry, with `retry`) lazy roadmap summary. */
+	onRequestSummary?: (documentId: string, sectionId: string, retry?: boolean) => void;
+	onTeachChapter?: (documentId: string, section: StudySection) => void;
+	onSaveToGraph?: (documentId: string) => void;
 	onRetryDocument?: (doc: StudyDocument) => void;
 	onRemoveRelated?: (documentId: string, targetDocumentId: string, targetSectionId?: string) => void;
 	onOpenGraph?: () => void;
@@ -402,8 +524,8 @@ export function ReadDocumentView({
 	treeOpen = false,
 	focusSectionId = null,
 	initialScrollTop = 0,
-	suggestingKey = null,
-	moreQuestionsKey = null,
+	writers = [],
+	graphSaving = false,
 	notice = null,
 	canGoDeeper = true,
 	onToggleTree = () => {},
@@ -411,6 +533,9 @@ export function ReadDocumentView({
 	onSuggest = () => {},
 	onGoDeeper = () => {},
 	onMoreQuestions = () => {},
+	onRequestSummary = () => {},
+	onTeachChapter = () => {},
+	onSaveToGraph = () => {},
 	onRetryDocument = () => {},
 	onRemoveRelated = () => {},
 	onOpenGraph = () => {},
@@ -428,7 +553,9 @@ export function ReadDocumentView({
 	const words = studyDocumentWordCount(active);
 	const minutes = readMinutes(words);
 	const activeStatus = active ? studyDocumentStatus(active) : "ready";
-	const isWriting = writing || activeStatus === "writing";
+	const activeWriters = active ? writers.filter((writer) => writer.documentId === active.id && writer.status !== "failed") : [];
+	const isWriting = writing || activeStatus === "writing" || activeWriters.length > 0;
+	const writtenSections = sections.filter((section) => !section.seed).length;
 
 	return (
 		<aside
@@ -487,8 +614,17 @@ export function ReadDocumentView({
 				{isWriting && (
 					<span className="flex shrink-0 items-center gap-1.5 font-ui text-[11px] text-muted-foreground">
 						<BrailleSpinner label="Writing the document" />
-						Writing…
+						{activeWriters.length > 1 ? `Writing ${activeWriters.length}…` : "Writing…"}
 					</span>
+				)}
+				{active && writtenSections > 0 && activeStatus !== "writing" && (
+					<HintlessButton
+						label={graphSaving ? "Saving to your knowledge graph…" : "Save this document to your knowledge graph"}
+						onClick={() => { if (!graphSaving) onSaveToGraph(active.id); }}
+						testId="read-pane-save-graph"
+					>
+						{graphSaving ? <BrailleSpinner label="Saving to the graph" /> : <NetworkIcon className="size-4" />}
+					</HintlessButton>
 				)}
 				<HintlessButton
 					label={view === "graph" ? "Back to reading" : "Open the topic graph"}
@@ -576,26 +712,25 @@ export function ReadDocumentView({
 						onBack={parent ? () => onOpenDocument(parent.id) : undefined}
 					/>
 				) : (
-					<div className="flex min-h-0 min-w-0 flex-1">
-						<ReadArticle
+					<ReadArticle
 							key={active!.id}
 							document={active!}
 							documents={documents}
 							record={record}
 							notice={notice}
-							suggestingKey={suggestingKey}
-							moreQuestionsKey={moreQuestionsKey}
 							canGoDeeper={canGoDeeper}
 							focusSectionId={focusSectionId}
 							initialScrollTop={initialScrollTop}
+							writers={writers}
 							onOpenDocument={onOpenDocument}
 							onSuggest={onSuggest}
 							onGoDeeper={onGoDeeper}
 							onMoreQuestions={onMoreQuestions}
+							onRequestSummary={onRequestSummary}
+							onTeachChapter={onTeachChapter}
 							onRemoveRelated={onRemoveRelated}
 							onScroll={onScroll}
 						/>
-					</div>
 				)}
 			</div>
 		</aside>
@@ -809,13 +944,16 @@ function StudyTree({
 	);
 }
 
+/** How long a seed section must stay on screen before its summary is
+ *  requested: long enough that scrolling past does not fire it. */
+const SUMMARY_DWELL_MS = 1200;
+
 function ReadArticle({
 	document,
 	documents,
 	record,
 	notice,
-	suggestingKey,
-	moreQuestionsKey,
+	writers,
 	canGoDeeper,
 	focusSectionId,
 	initialScrollTop,
@@ -823,6 +961,8 @@ function ReadArticle({
 	onSuggest,
 	onGoDeeper,
 	onMoreQuestions,
+	onRequestSummary,
+	onTeachChapter,
 	onRemoveRelated,
 	onScroll,
 }: {
@@ -830,8 +970,7 @@ function ReadArticle({
 	documents: StudyDocument[];
 	record: { document?: StudyDocument; documents: StudyDocument[] };
 	notice: string | null;
-	suggestingKey: string | null;
-	moreQuestionsKey: string | null;
+	writers: readonly StudyWriterView[];
 	canGoDeeper: boolean;
 	focusSectionId: string | null;
 	initialScrollTop: number;
@@ -839,13 +978,16 @@ function ReadArticle({
 	onSuggest: (documentId: string, sectionId: string) => void;
 	onGoDeeper: (documentId: string, sectionId: string, topicId: string) => void;
 	onMoreQuestions: (documentId: string, sectionId: string) => void;
+	onRequestSummary: (documentId: string, sectionId: string, retry?: boolean) => void;
+	onTeachChapter: (documentId: string, section: StudySection) => void;
 	onRemoveRelated: (documentId: string, targetDocumentId: string, targetSectionId?: string) => void;
 	onScroll: (documentId: string, top: number) => void;
 }) {
 	const sections = document.sections;
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const [activeId, setActiveId] = useState<string | null>(sections[0]?.id ?? null);
-
+	const requestSummaryRef = useRef(onRequestSummary);
+	requestSummaryRef.current = onRequestSummary;
 	// Restore this document's place; a fresh document starts at the top.
 	useLayoutEffect(() => {
 		const root = scrollRef.current;
@@ -857,8 +999,10 @@ function ReadArticle({
 		const el = root?.querySelector<HTMLElement>(`[data-section-id="${focusSectionId}"]`);
 		el?.scrollIntoView({ behavior: "smooth", block: "start" });
 		setActiveId(focusSectionId);
-	}, [focusSectionId, sections.length]);
-
+		// Opening a topic from the map, the contents or a card is an explicit
+		// open: its lazy summary starts at once, no dwell.
+		if (sections.find((s) => s.id === focusSectionId)?.seed) requestSummaryRef.current(document.id, focusSectionId);
+	}, [focusSectionId, sections.length, document.id]);
 	// Keep the active highlight honest when a section is removed or the
 	// first document arrives after mount.
 	useEffect(() => {
@@ -868,13 +1012,12 @@ function ReadArticle({
 		}
 		if (!sections.some((s) => s.id === activeId)) setActiveId(sections[0]!.id);
 	}, [sections, activeId]);
-
-	// Active-section tracking: the quick-nav highlights the section at the
-	// top of the reading viewport. Root-scoped, so the pane's own scroll is
-	// the only thing that moves it (the chat's scroll stays independent).
+	// Active-section tracking: the contents rail and the chip row highlight
+	// the section at the top of the reading viewport. Root-scoped, so the
+	// pane's own scroll is the only thing that moves it.
 	useEffect(() => {
 		const root = scrollRef.current;
-		if (!root || sections.length === 0) return;
+		if (!root || sections.length === 0 || typeof IntersectionObserver === "undefined") return;
 		const observer = new IntersectionObserver(
 			(entries) => {
 				const visible = entries
@@ -891,13 +1034,48 @@ function ReadArticle({
 		}
 		return () => observer.disconnect();
 	}, [sections]);
-
+	// Lazy summaries (2026-11-15): a seed section that stays on screen for
+	// SUMMARY_DWELL_MS counts as opened, and its summary is requested.
+	const seedIds = sections.filter((s) => s.seed).map((s) => s.id).join("|");
+	useEffect(() => {
+		const root = scrollRef.current;
+		if (!root || !seedIds || typeof IntersectionObserver === "undefined") return;
+		const timers = new Map<string, ReturnType<typeof setTimeout>>();
+		const observer = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					const id = (entry.target as HTMLElement).dataset.sectionId;
+					if (!id) continue;
+					if (entry.isIntersecting) {
+						if (!timers.has(id)) {
+							timers.set(id, setTimeout(() => {
+								timers.delete(id);
+								requestSummaryRef.current(document.id, id);
+							}, SUMMARY_DWELL_MS));
+						}
+					} else {
+						clearTimeout(timers.get(id));
+						timers.delete(id);
+					}
+				}
+			},
+			{ root, threshold: 0.25 },
+		);
+		for (const id of seedIds.split("|")) {
+			const el = root.querySelector<HTMLElement>(`[data-section-id="${id}"]`);
+			if (el) observer.observe(el);
+		}
+		return () => {
+			observer.disconnect();
+			for (const timer of timers.values()) clearTimeout(timer);
+		};
+	}, [seedIds, document.id]);
 	const scrollTo = (id: string) => {
 		const el = scrollRef.current?.querySelector<HTMLElement>(`[data-section-id="${id}"]`);
 		el?.scrollIntoView({ behavior: "smooth", block: "start" });
 		setActiveId(id);
+		if (sections.find((s) => s.id === id)?.seed) onRequestSummary(document.id, id);
 	};
-
 	const related = (document.related ?? []).flatMap((link) => {
 		const target = studyDocumentById(record, link.documentId);
 		if (!target) return [];
@@ -905,129 +1083,237 @@ function ReadArticle({
 		if (link.sectionId && !section) return [];
 		return [{ link, target, section }];
 	});
-
 	return (
-		<div
-			ref={scrollRef}
-			data-testid="read-pane-scroll"
-			className="min-w-0 flex-1 overflow-y-auto"
-			onScroll={(event) => onScroll(document.id, event.currentTarget.scrollTop)}
-		>
-			{/* Narrow-pane contents: a sticky chapter chip row, same section
-			    targets as the tree. Hidden on wide screens where the tree is
-			    the primary map. */}
-			<div className="sticky top-0 z-10 flex gap-1.5 overflow-x-auto border-b border-border/60 bg-background/95 px-4 py-2 backdrop-blur lg:hidden">
-				{sections.map((section) => (
-					<button
-						key={section.id}
-						type="button"
-						onClick={() => scrollTo(section.id)}
-						aria-current={activeId === section.id ? "true" : undefined}
-						className={cn(
-							"shrink-0 cursor-pointer rounded-full border px-2.5 py-0.5 font-ui text-[11px] transition-colors",
-							activeId === section.id
-								? "border-border bg-accent text-foreground"
-								: "border-border/60 text-muted-foreground hover:text-foreground",
-						)}
-					>
-						{section.heading}
-					</button>
-				))}
-			</div>
-			{notice && (
-				<p role="status" className="mx-auto mt-4 w-full max-w-[48rem] rounded-md border border-destructive/30 bg-destructive/5 px-4 py-2 text-sm text-destructive">
-					{notice}
-				</p>
-			)}
-			<article className="mx-auto w-full max-w-[48rem] px-8 py-10">
-				{sections.map((section, i) => (
-					<section
-						key={section.id}
-						id={`read-section-${section.id}`}
-						data-section-id={section.id}
-						className={cn("scroll-mt-16", i > 0 && "mt-12 border-t border-border/50 pt-10")}
-					>
-						<h3 className="mb-3 font-title text-xl leading-snug tracking-tight">{section.heading}</h3>
-						<div className="lh-prose">
-							{/* Mermaid renders inline; the chat's full-screen focus
-							    overlay lives in the chat column, so the pane opts out
-							    of the expand affordance rather than opening a focus
-							    the pane would hide on narrow screens. */}
-							<SessionMermaidContext.Provider value={null}>
-								<MessageResponse>{section.body}</MessageResponse>
-							</SessionMermaidContext.Provider>
-						</div>
-						<SelfCheck
-							questions={section.questions ?? []}
-							generating={moreQuestionsKey === `${document.id}:${section.id}`}
-							disabled={moreQuestionsKey !== null}
-							onMoreQuestions={() => onMoreQuestions(document.id, section.id)}
-						/>
-						<SectionDirections
-							document={document}
-							sectionId={section.id}
-							sectionHeading={section.heading}
-							suggestions={section.suggestions ?? []}
-							docs={documents}
-							suggestingKey={suggestingKey}
-							canGoDeeper={canGoDeeper}
-							collapsed={document.roadmap !== undefined && (section.suggestions ?? []).some((topic) => topic.roadmap !== undefined)}
-							onSuggest={onSuggest}
-							onGoDeeper={onGoDeeper}
-							onOpenDocument={onOpenDocument}
-						/>
-					</section>
-				))}
-				{related.length > 0 && (
-					<section className="mt-12 border-t border-border/50 pt-8" data-testid="read-pane-related">
-						<div className="mb-3 font-ui text-[10px] font-medium uppercase tracking-widest text-muted-foreground/80">
-							Related topics
-						</div>
-						<div className="grid gap-2">
-							{related.map(({ link, target, section }) => (
-								<div key={`${link.documentId}:${link.sectionId ?? ""}`} className="group flex items-stretch gap-1">
-									<button
-										type="button"
-										onClick={() => onOpenDocument(target.id, section?.id)}
-										className="min-w-0 flex-1 cursor-pointer rounded-md border border-border/60 px-3 py-2 text-left transition-colors hover:border-border hover:bg-accent/40"
-									>
-										<span className="flex items-center gap-1.5 font-ui text-xs font-medium">
-											{target.title || "Untitled"}
-											{section && <span className="font-normal text-muted-foreground">· {section.heading}</span>}
-											<ArrowUpRightIcon className="size-3 shrink-0 text-muted-foreground" />
-										</span>
-										<span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">{link.reason}</span>
-									</button>
-									<button
-										type="button"
-										onClick={() => onRemoveRelated(document.id, link.documentId, link.sectionId)}
-										aria-label="Remove related link"
-										className="flex w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/40 transition-colors hover:bg-accent hover:text-foreground"
-									>
-										<XIcon className="size-3.5" />
-									</button>
-								</div>
-							))}
-						</div>
-					</section>
+		<div className="flex min-h-0 min-w-0 flex-1">
+			{/* Wide screens: a persistent contents rail for the open document
+			    (the drawer remains the whole-tree map). */}
+			<nav
+				aria-label="Sections"
+				data-testid="read-pane-rail"
+				className="hidden w-60 shrink-0 overflow-y-auto border-r border-border/60 py-6 pl-4 pr-2 lg:block"
+			>
+				<div className="mb-2 px-2 font-ui text-[10px] font-medium uppercase tracking-widest text-muted-foreground/70">
+					Sections
+				</div>
+				<ol className="space-y-0.5">
+					{sections.map((section) => (
+						<li key={section.id}>
+							<button
+								type="button"
+								onClick={() => scrollTo(section.id)}
+								aria-current={activeId === section.id ? "true" : undefined}
+								className={cn(
+									"flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-left font-ui text-xs leading-snug transition-colors",
+									activeId === section.id
+										? "bg-accent text-foreground"
+										: section.seed
+											? "text-muted-foreground/60 hover:bg-accent/50 hover:text-foreground"
+											: "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+								)}
+							>
+								<span className="min-w-0 flex-1 truncate">{section.heading}</span>
+								{writerFor(writers, "summary", document.id, section.id)?.status === "running" && <BrailleSpinner label="Writing" />}
+							</button>
+						</li>
+					))}
+				</ol>
+			</nav>
+			<div
+				ref={scrollRef}
+				data-testid="read-pane-scroll"
+				className="min-w-0 flex-1 overflow-y-auto"
+				onScroll={(event) => onScroll(document.id, event.currentTarget.scrollTop)}
+			>
+				{/* Narrow-pane contents: a sticky chapter chip row, same section
+				    targets as the rail (which takes over on wide screens). */}
+				<div className="sticky top-0 z-10 flex gap-1.5 overflow-x-auto border-b border-border/60 bg-background/95 px-4 py-2 backdrop-blur lg:hidden">
+					{sections.map((section) => (
+						<button
+							key={section.id}
+							type="button"
+							onClick={() => scrollTo(section.id)}
+							aria-current={activeId === section.id ? "true" : undefined}
+							className={cn(
+								"shrink-0 cursor-pointer rounded-full border px-2.5 py-0.5 font-ui text-[11px] transition-colors",
+								activeId === section.id
+									? "border-border bg-accent text-foreground"
+									: "border-border/60 text-muted-foreground hover:text-foreground",
+							)}
+						>
+							{section.heading}
+						</button>
+					))}
+				</div>
+				{notice && (
+					<p role="status" className="mx-auto mt-4 w-full max-w-[48rem] rounded-md border border-border bg-accent/30 px-4 py-2 text-sm text-foreground">
+						{notice}
+					</p>
 				)}
-			</article>
+				<article className="mx-auto w-full max-w-[48rem] px-8 py-10">
+					{sections.map((section, i) => (
+						<section
+							key={section.id}
+							id={`read-section-${section.id}`}
+							data-section-id={section.id}
+							className={cn("scroll-mt-16", i > 0 && "mt-12 border-t border-border/50 pt-10")}
+						>
+							<div className="mb-3 flex items-start gap-2">
+								<h3 className="min-w-0 flex-1 font-title text-xl leading-snug tracking-tight">{section.heading}</h3>
+								{!section.seed && (
+									<button
+										type="button"
+										onClick={() => onTeachChapter(document.id, section)}
+										data-testid="read-section-teach"
+										title="Start a Teach session on this chapter"
+										className="mt-0.5 flex shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 font-ui text-[10px] uppercase tracking-widest text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
+									>
+										<GraduationCapIcon className="size-3.5" aria-hidden="true" />
+										Teach me
+									</button>
+								)}
+							</div>
+							{section.seed ? (
+								<SeedSummary
+									writer={writerFor(writers, "summary", document.id, section.id)}
+									onRetry={() => onRequestSummary(document.id, section.id, true)}
+								/>
+							) : (
+								<div className="lh-prose">
+									{/* Mermaid renders inline; the chat's full-screen focus
+									    overlay lives in the chat column, so the pane opts out
+									    of the expand affordance rather than opening a focus
+									    the pane would hide on narrow screens. */}
+									<SessionMermaidContext.Provider value={null}>
+										<MessageResponse>{section.body}</MessageResponse>
+									</SessionMermaidContext.Provider>
+								</div>
+							)}
+							{!section.seed && (
+								<SelfCheck
+									questions={section.questions ?? []}
+									writer={writerFor(writers, "questions", document.id, section.id)}
+									onMoreQuestions={() => onMoreQuestions(document.id, section.id)}
+								/>
+							)}
+							<SectionDirections
+								document={document}
+								sectionId={section.id}
+								sectionHeading={section.heading}
+								suggestions={section.suggestions ?? []}
+								docs={documents}
+								writers={writers}
+								canGoDeeper={canGoDeeper}
+								collapsed={document.roadmap !== undefined && (section.suggestions ?? []).some((topic) => topic.roadmap !== undefined)}
+								onSuggest={onSuggest}
+								onGoDeeper={onGoDeeper}
+								onOpenDocument={onOpenDocument}
+							/>
+						</section>
+					))}
+					{related.length > 0 && (
+						<section className="mt-12 border-t border-border/50 pt-8" data-testid="read-pane-related">
+							<div className="mb-3 font-ui text-[10px] font-medium uppercase tracking-widest text-muted-foreground/80">
+								Related topics
+							</div>
+							<div className="grid gap-2">
+								{related.map(({ link, target, section }) => (
+									<div key={`${link.documentId}:${link.sectionId ?? ""}`} className="group flex items-stretch gap-1">
+										<button
+											type="button"
+											onClick={() => onOpenDocument(target.id, section?.id)}
+											className="min-w-0 flex-1 cursor-pointer rounded-md border border-border/60 px-3 py-2 text-left transition-colors hover:border-border hover:bg-accent/40"
+										>
+											<span className="flex items-center gap-1.5 font-ui text-xs font-medium">
+												{target.title || "Untitled"}
+												{section && <span className="font-normal text-muted-foreground">· {section.heading}</span>}
+												<ArrowUpRightIcon className="size-3 shrink-0 text-muted-foreground" />
+											</span>
+											<span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">{link.reason}</span>
+										</button>
+										<button
+											type="button"
+											onClick={() => onRemoveRelated(document.id, link.documentId, link.sectionId)}
+											aria-label="Remove related link"
+											className="flex w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/40 transition-colors hover:bg-accent hover:text-foreground"
+										>
+											<XIcon className="size-3.5" />
+										</button>
+									</div>
+								))}
+							</div>
+						</section>
+					)}
+				</article>
+			</div>
 		</div>
+	);
+}
+
+/** A roadmap topic whose summary is not written yet: the writer's state,
+ *  never the placeholder body. */
+function SeedSummary({ writer, onRetry }: { writer: StudyWriterView | undefined; onRetry: () => void }) {
+	if (writer?.status === "failed") {
+		return (
+			<div data-testid="read-section-seed" data-state="failed" className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+				<TriangleAlertIcon className="size-3.5 shrink-0 text-destructive" aria-hidden="true" />
+				<span>{writer.error ?? "The summary could not be written."}</span>
+				<button
+					type="button"
+					onClick={onRetry}
+					className="cursor-pointer rounded-md border border-border px-2 py-0.5 font-ui text-xs text-foreground transition-colors hover:bg-accent"
+				>
+					Retry
+				</button>
+			</div>
+		);
+	}
+	if (writer) {
+		return (
+			<div data-testid="read-section-seed" data-state="writing" className="flex items-center gap-2 text-sm text-muted-foreground">
+				<BrailleSpinner label="Writing the summary" />
+				{writer.status === "queued" ? "Summary queued…" : "Writing the summary…"}
+			</div>
+		);
+	}
+	return (
+		<p data-testid="read-section-seed" data-state="seed" className="text-sm text-muted-foreground/70">
+			The summary is written when you open this topic.
+		</p>
 	);
 }
 
 function SelfCheck({
 	questions,
-	generating = false,
-	disabled = false,
+	writer,
 	onMoreQuestions,
 }: {
 	questions: readonly StudySectionQuestion[];
-	generating?: boolean;
-	disabled?: boolean;
+	writer?: StudyWriterView;
 	onMoreQuestions?: () => void;
 }) {
-	if (questions.length === 0) return null;
+	const generating = writer !== undefined && writer.status !== "failed";
+	const failed = writer?.status === "failed" ? writer.error ?? "Could not write questions." : null;
+	const button = (label: string) => (
+		<button
+			type="button"
+			onClick={onMoreQuestions}
+			disabled={generating}
+			data-testid="read-section-more-questions"
+			className="flex cursor-pointer items-center gap-1.5 rounded-md border border-dashed border-border/70 px-2.5 py-1.5 font-ui text-[10px] uppercase tracking-widest text-muted-foreground/70 transition-colors hover:border-border hover:bg-accent/30 hover:text-foreground disabled:cursor-default disabled:opacity-60"
+		>
+			{generating ? <BrailleSpinner label="Writing questions" /> : <SparklesIcon className="size-3" aria-hidden="true" />}
+			{generating ? "Writing questions…" : label}
+		</button>
+	);
+	if (questions.length === 0) {
+		// A chapter without questions can still ask for some.
+		return (
+			<div className="mt-6 flex flex-wrap items-center gap-2" data-testid="read-section-questions-empty">
+				{button("Add self-check questions")}
+				{failed && <span className="text-xs text-destructive">{failed}</span>}
+			</div>
+		);
+	}
 	return (
 		// Native details: collapsed by default, keyboard-accessible, no state.
 		<details className="group mt-6 rounded-md border border-border/60" data-testid="read-section-questions">
@@ -1054,15 +1340,10 @@ function SelfCheck({
 						</div>
 					</details>
 				))}
-				<button
-					type="button"
-					onClick={onMoreQuestions}
-					disabled={generating || disabled}
-					className="mt-1 flex cursor-pointer items-center gap-1.5 rounded-md border border-dashed border-border/70 px-2.5 py-1.5 font-ui text-[10px] uppercase tracking-widest text-muted-foreground/70 transition-colors hover:border-border hover:bg-accent/30 hover:text-foreground disabled:cursor-default disabled:opacity-60"
-				>
-					{generating ? <BrailleSpinner label="Generating more questions" /> : <SparklesIcon className="size-3" aria-hidden="true" />}
-					{generating ? "Generating more questions…" : "Generate more questions"}
-				</button>
+				<div className="mt-1 flex flex-wrap items-center gap-2">
+					{button("Generate more questions")}
+					{failed && <span className="text-xs text-destructive">{failed}</span>}
+				</div>
 			</div>
 		</details>
 	);
@@ -1074,7 +1355,7 @@ function SectionDirections({
 	sectionHeading,
 	suggestions,
 	docs,
-	suggestingKey,
+	writers,
 	canGoDeeper,
 	collapsed = false,
 	onSuggest,
@@ -1086,15 +1367,17 @@ function SectionDirections({
 	sectionHeading: string;
 	suggestions: readonly StudyTopicSuggestion[];
 	docs: readonly StudyDocument[];
-	suggestingKey: string | null;
+	writers: readonly StudyWriterView[];
 	canGoDeeper: boolean;
 	collapsed?: boolean;
 	onSuggest: (documentId: string, sectionId: string) => void;
 	onGoDeeper: (documentId: string, sectionId: string, topicId: string) => void;
 	onOpenDocument: (documentId: string, sectionId?: string) => void;
 }) {
-	const key = `${document.id}:${sectionId}`;
-	const suggesting = suggestingKey === key;
+	const directions = writerFor(writers, "directions", document.id, sectionId);
+	const suggesting = directions !== undefined && directions.status !== "failed";
+	const subtopicWriter = writerFor(writers, "subtopics", document.id, sectionId);
+	const describing = subtopicWriter !== undefined && subtopicWriter.status !== "failed";
 	if (suggestions.length === 0 && !canGoDeeper) return null;
 	const children = docs.filter((doc) =>
 		doc.parent?.documentId === document.id && doc.parent.sectionId === sectionId,
@@ -1108,6 +1391,9 @@ function SectionDirections({
 				const existing = topic.documentId ? docs.find((doc) => doc.id === topic.documentId) : undefined;
 				const target = child ?? existing;
 				const status = child ? studyDocumentStatus(child) : null;
+				const starting = writers.some((writer) => writer.kind === "deep-dive" && writer.status !== "failed" &&
+					(writer.documentId === child?.id || (writer.documentId === document.id && writer.sectionId === sectionId && writer.topicId === topic.id)));
+				const pendingBlurb = studySubtopicPending(topic);
 				return (
 					<button
 						key={topic.id}
@@ -1121,7 +1407,7 @@ function SectionDirections({
 					>
 						<span className="flex w-full items-center gap-1.5 font-ui text-xs font-medium">
 							<span className="min-w-0 flex-1 truncate">{topic.heading}</span>
-							{status === "writing" ? (
+							{status === "writing" || starting ? (
 								<BrailleSpinner label="Writing" />
 							) : status === "failed" ? (
 								<TriangleAlertIcon className="size-3 shrink-0 text-destructive" />
@@ -1131,9 +1417,11 @@ function SectionDirections({
 								<PlusIcon className="size-3 shrink-0 text-muted-foreground" />
 							)}
 						</span>
-						<span className="text-xs leading-relaxed text-muted-foreground">{topic.blurb}</span>
+						<span className={cn("text-xs leading-relaxed", pendingBlurb ? "italic text-muted-foreground/50" : "text-muted-foreground")}>
+							{pendingBlurb && describing ? "Writing the overview…" : topic.blurb}
+						</span>
 						<span className="font-ui text-[10px] uppercase tracking-widest text-muted-foreground/50">
-							{status === "writing" ? "Writing…" : status === "failed" ? "Retry" : target ? "Open topic" : "Write this topic"}
+							{status === "writing" || starting ? "Writing…" : status === "failed" ? "Retry" : target ? "Open topic" : "Write this topic"}
 						</span>
 					</button>
 				);
@@ -1147,6 +1435,7 @@ function SectionDirections({
 					<WaypointsIcon className="size-3.5 shrink-0" aria-hidden="true" />
 					Roadmap subtopics
 					<span className="font-normal normal-case tracking-normal text-muted-foreground/60">{suggestions.length}</span>
+					{describing && <BrailleSpinner label="Writing subtopic overviews" />}
 					<ChevronDownIcon className="ml-auto size-3.5 shrink-0 text-muted-foreground/60 transition-transform group-open:rotate-180" aria-hidden="true" />
 				</summary>
 				<div className="border-t border-border/50 p-3">{cards}</div>
@@ -1172,6 +1461,9 @@ function SectionDirections({
 				)}
 				<span className="h-px flex-1 bg-border/50" />
 			</div>
+			{directions?.status === "failed" && (
+				<p className="mt-2 text-xs text-destructive">{directions.error ?? "Could not write new directions."}</p>
+			)}
 			{suggesting ? (
 				<div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
 					<BrailleSpinner label="Thinking of directions" />

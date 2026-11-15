@@ -1,9 +1,9 @@
 /**
- * READ DEEPER INPUTS (2026-11-12): the learner's clicks are hidden session
- * markers, not chat speech. These pins hold the contract the read pane and
- * the read prompt rely on: "suggest deeper" names a real chapter, "go
- * deeper" names a real suggestion and its pending child, and ordinary chat
- * carries the document the learner is reading.
+ * READ CHAT INPUTS (2026-11-12; clicks moved to background writers
+ * 2026-11-15). Ordinary chat carries the document the learner is reading
+ * as a hidden context marker, re-added when the open document changes.
+ * The click events (suggest/go deeper, more questions) are no longer chat
+ * inputs — they queue background writers — so the parser refuses them.
  */
 
 import assert from "node:assert/strict";
@@ -51,78 +51,15 @@ function record(): ChatRecord {
 	};
 }
 
-describe("read deeper input parsing", () => {
-	it("accepts the two click events and rejects missing ids", () => {
-		assert.deepEqual(parseChatInput({ type: "suggest-deeper", documentId: "root", sectionId: "maps" }), {
-			type: "suggest-deeper",
-			documentId: "root",
-			sectionId: "maps",
-		});
-		assert.deepEqual(parseChatInput({
-			type: "go-deeper",
-			documentId: "root",
-			sectionId: "maps",
-			topicId: "eigen",
-			childDocumentId: "doc_eigen",
-		}), {
-			type: "go-deeper",
-			documentId: "root",
-			sectionId: "maps",
-			topicId: "eigen",
-			childDocumentId: "doc_eigen",
-		});
-		assert.throws(() => parseChatInput({ type: "suggest-deeper", documentId: "root" }), ChatInputError);
-		assert.throws(() => parseChatInput({ type: "go-deeper", documentId: "root", sectionId: "maps", topicId: "eigen" }), ChatInputError);
-		assert.deepEqual(parseChatInput({ type: "more-questions", documentId: "root", sectionId: "maps" }), {
-			type: "more-questions",
-			documentId: "root",
-			sectionId: "maps",
-		});
+describe("read click events are not chat inputs", () => {
+	it("refuses the removed click input types", () => {
+		for (const type of ["suggest-deeper", "go-deeper", "more-questions"]) {
+			assert.throws(() => parseChatInput({ type, documentId: "root", sectionId: "maps", topicId: "eigen", childDocumentId: "doc_eigen" }), ChatInputError);
+		}
 	});
 });
 
-describe("read deeper input appends", () => {
-	it("writes a hidden suggest marker naming the chapter", () => {
-		const [marker] = inputAppends(record(), { type: "suggest-deeper", documentId: "root", sectionId: "maps" }) as [LhMarkerMessage | undefined];
-		assert.equal(marker?.role, "custom");
-		assert.equal(marker?.customType, "read-suggest");
-		assert.equal(marker?.display, false);
-		assert.match(marker?.content ?? "", /Linear maps/);
-		assert.match(marker?.content ?? "", /suggest_deeper/);
-		assert.doesNotMatch(marker?.content ?? "", /write a child document now/i);
-	});
-
-	it("writes a hidden deeper marker naming the pending child", () => {
-		const [marker] = inputAppends(record(), {
-			type: "go-deeper",
-			documentId: "root",
-			sectionId: "maps",
-			topicId: "eigen",
-			childDocumentId: "doc_eigen",
-		}) as [LhMarkerMessage | undefined];
-		assert.equal(marker?.customType, "read-deeper");
-		assert.equal(marker?.display, false);
-		assert.match(marker?.content ?? "", /Eigenvectors/);
-		assert.match(marker?.content ?? "", /documentId="doc_eigen"/);
-	});
-
-	it("refuses a suggestion that does not exist or a mismatched child", () => {
-		assert.throws(
-			() => inputAppends(record(), { type: "suggest-deeper", documentId: "root", sectionId: "nope" }),
-			(err) => err instanceof ChatInputError && /targets no chapter/.test(err.message),
-		);
-		assert.throws(
-			() => inputAppends(record(), {
-				type: "go-deeper",
-				documentId: "root",
-				sectionId: "maps",
-				topicId: "eigen",
-				childDocumentId: "doc_other",
-			}),
-			(err) => err instanceof ChatInputError && /pending child/.test(err.message),
-		);
-	});
-
+describe("read chat context", () => {
 	it("prepends the active-document context once for ordinary chat", () => {
 		const rec = record();
 		const appends = inputAppends(rec, { type: "text", text: "Continue this." });
@@ -140,40 +77,11 @@ describe("read deeper input appends", () => {
 
 	it("marks a roadmap-seeded root in the active-document context", () => {
 		const rec = record();
-		rec.document!.sections[0]!.suggestions![0]!.roadmap = { slug: "angular", nodeId: "track:foundations", kind: "track" };
+		rec.document!.sections[0]!.suggestions![0]!.roadmap = { slug: "angular", nodeId: "subtopic:maps:eigen", kind: "subtopic" };
 		const appends = inputAppends(rec, { type: "text", text: "Angular" });
 		const context = appends[0] as LhMarkerMessage | undefined;
-		assert.match(context?.content ?? "", /roadmap-seeded starting graph/);
-	});
-
-	it("writes a hidden more-questions marker naming the chapter", () => {
-		const [marker] = inputAppends(record(), {
-			type: "more-questions",
-			documentId: "root",
-			sectionId: "maps",
-		}) as [LhMarkerMessage | undefined];
-		assert.equal(marker?.customType, "read-questions");
-		assert.equal(marker?.display, false);
-		assert.match(marker?.content ?? "", /more self-check questions/);
-		assert.match(marker?.content ?? "", /keep every existing question/i);
-		assert.throws(
-			() => inputAppends(record(), { type: "more-questions", documentId: "root", sectionId: "nope" }),
-			(err) => err instanceof ChatInputError && /targets no chapter/.test(err.message),
-		);
-	});
-
-	it("carries the roadmap context into a chosen deeper turn", () => {
-		const rec = record();
-		rec.document!.sections[0]!.suggestions![0]!.roadmap = { slug: "angular", nodeId: "topic:components", kind: "topic" };
-		const [marker] = inputAppends(rec, {
-			type: "go-deeper",
-			documentId: "root",
-			sectionId: "maps",
-			topicId: "eigen",
-			childDocumentId: "doc_eigen",
-			roadmapContext: "Roadmap topic: Components. Subtopics: Selector; Template.",
-		}) as [LhMarkerMessage | undefined];
-		assert.match(marker?.content ?? "", /Roadmap topic: Components/);
+		assert.match(context?.content ?? "", /seeded from a roadmap/);
+		assert.match(context?.content ?? "", /background writers/);
 	});
 
 	it("re-adds the context after switching documents", () => {

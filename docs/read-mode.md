@@ -1,416 +1,167 @@
 # Read mode — the living study document
 
-Status: **implemented 2026-11-04** (owner rulings in the planning round the same day). This is the design record for the third session kind, alongside teach and practice.
+Status: **current as of 2026-11-15.** This is the single current design for the read session kind. The append-only record of how it got here (2026-11-04 → 11-13) is archived at [archive/read-mode-2026-11-13.md](archive/read-mode-2026-11-13.md); the 2026-11-15 audit and owner rulings are summarized under [Decisions](#decisions).
 
 ## What it is
 
-**Read** is a documentation-only mode. The agent writes a **living study document** into a dedicated reading pane; the learner reads it and steers changes through a short chat. There is no quiz, no probing, no plan tree, no problems, and no graph extraction.
+**Read** is the documentation mode. The agent writes a **living study document** into a reading pane; the learner reads it and steers it through a short chat. There is no graded quiz, no probing, and no plan tree.
 
-The mode exists because teach opens by probing (the learner answers questions before seeing material), which can feel blind. Read inverts that: the material is written first, and the learner's reading drives the session. It is not a replacement for teaching — it is the place to read the material teaching would build from.
+Teach opens by probing (the learner answers before seeing material), which can feel blind. Read inverts that: the material comes first. It is not a replacement for teaching — a chapter can hand off to a Teach session — but the place to read the material teaching would build from.
 
 | | Teach | Practice | **Read** |
 |---|---|---|---|
 | Opens with | probing questions | problems | a written study document |
 | Learner does | answers checks | solves problems | reads and steers |
-| Quiz | yes | problems | none |
+| Quiz | yes | problems | none (private self-check Q&A only) |
 | Plan tree | yes | no | no |
-| Graph extraction | yes | no | no |
+| Graph extraction | automatic | no | explicit "Save to graph" |
 | Session kind | absent (default) | `practice` | `read` |
 
-## Owner decisions (2026-11-04)
+## Decisions
 
-- **AI-written study guide**, not a graph summary and not imported notes.
-- **Document-first main view** (amended 2026-11-12): the full study document owns the main area. The conversation is secondary — a floating panel over the document, closed by default and opened from the Chat chip. No split view.
-- **Living document you steer**: the agent writes, the learner steers through chat.
-- **Agent-only edits**: the learner never edits the pane directly.
-- **Starts with a summary of the topic's main ideas**, sized by the agent to the subject (no fixed word count); real explanation, not an outline.
-- **Never asks a clarifying question before writing**: choose the standard reading and state the assumption in the document.
-- **No graded quiz**, ever. The document may carry optional self-check questions with hidden model answers; the learner reveals them privately, never submits an answer.
-- **No knowledge-graph extraction** (a later explicit "save to graph" action is a possible follow-up).
-- **Tools**: research, files/PDFs, and mermaid diagrams. No quiz/ask/plan/probe/problem/demo/visual tools.
-- **Name**: Read. Session kind `read`.
+Owner rulings, newest first. Anything not listed here follows the archived record.
 
-## The document
+**2026-11-15 (audit round)**
 
-`StudyDocument` lives on the session record (`ChatRecord.document`), not in transcript messages:
+- **Roadmaps open lazily.** The opening chat turn writes only the Overview. Every subtopic overview is written up front by parallel background writers; each main topic's summary is written **when the learner opens it** (navigates to it, or it stays on screen for ~1.2 s). The old bulk opening (26 summaries + ~130 overviews + questions in one turn) is gone.
+- **Clicks run as parallel background writers**, never chat turns: deep dives, lazy summaries, subtopic overviews, more questions, fresh directions. At most **8 per session** run at once; the rest queue. They use the **session's own model**.
+- **Limits raised:** 500 documents per session, 200 suggestions per section, depth stays 6. Agent-authored directions stay at 2–4 by doctrine.
+- **Storage:** one file per document (`data/chats/<chatId>.docs/<docId>.json`); the record keeps only view state. Chat record version 5; older records migrate on first read.
+- **Graph features:** "Save to graph" per document, "Teach me" per chapter (a Teach session with the chapter as hidden context; the prober still probes), and the graph-map reader for the read agent and writers (behind the existing graph-tools switch).
+- **Roadmaps seed only from a roadmap card** (an explicit slug). Typed topics are never matched against roadmap names.
+- **Imported data is cleaned at seed time:** glyph-only labels dropped, repeated topic titles disambiguated (`UIKit (2)`), and every seed must pass the edit engine's whole-document rules.
+- **An edit with no `documentId` targets the document open when the turn started**, never whatever the learner navigates to mid-turn.
+- **Reading UX:** a persistent contents rail on wide screens, an unread/error dot on the Chat chip (a turn error opens the conversation), and "Add self-check questions" on chapters that have none.
+
+**2026-11-04 → 11-13 (still in force)**
+
+- AI-written study guide; document-first main view with the conversation as a floating panel, closed by default.
+- Agent-only edits: the learner steers, never edits the pane directly.
+- Never asks a clarifying question before writing; picks the standard reading and states the assumption.
+- No graded quiz, ever. Chapters may carry 1–3 private self-check questions with hidden model answers.
+- Every new chapter ships with 2–4 deeper directions; choosing one drills into a **child document** in the same session (not inline expansion, not a new session).
+- Cross-links between documents are agent-authored; the learner can remove a wrong one.
+- roadmap.sh presets store labels and hierarchy only, never roadmap prose.
+
+## The documents
 
 ```ts
-interface StudyRoadmapRef { slug: string; nodeId: string; kind: "track" | "topic" | "subtopic" }
-interface StudyTopicSuggestion { id: string; heading: string; blurb: string; documentId?: string; sectionId?: string; roadmap?: StudyRoadmapRef }
-interface StudySectionQuestion { id: string; question: string; answer: string }
-interface StudyRelatedLink { documentId: string; sectionId?: string; reason: string }
-interface StudySection { id: string; heading: string; body: string; suggestions?: StudyTopicSuggestion[]; questions?: StudySectionQuestion[] }
-interface StudyRoadmapView { slug: string; title: string; source: string; tracks: Array<{ id: string; title: string; topicIds: string[] }> }
+interface StudySection {
+  id: string; heading: string; body: string;          // markdown (LaTeX, mermaid)
+  suggestions?: StudyTopicSuggestion[];               // deeper directions / roadmap subtopics
+  questions?: StudySectionQuestion[];                 // private self-check Q&A
+  seed?: boolean;                                     // roadmap topic, summary not written yet
+}
 interface StudyDocument {
-  id: string;                    // "root" | "doc_…"
-  title: string;
-  sections: StudySection[];
-  revision: number;
-  updatedAt: string;
+  id: string;                    // "root" | "doc_…" (server-minted)
+  title: string; sections: StudySection[];
+  revision: number; updatedAt: string;
   parent?: { documentId: string; sectionId: string; topicId: string };
   related?: StudyRelatedLink[];
-  roadmap?: StudyRoadmapView;    // seeded root only
-  status?: "writing" | "ready" | "failed"; // absent reads ready
+  roadmap?: StudyRoadmapView;    // roadmap-seeded root only
+  status?: "writing" | "ready" | "failed";            // absent reads ready
 }
 ```
 
-Why the record: the guide must survive reloads and compaction, and the transcript is compacted. Section ids are stable slugs (the plan-tree discipline): the agent revises one section without restating the rest. `revision` bumps on every edit so a newer server copy is distinguishable. `parent` is the tree edge; a child is always spawned from one chapter's suggestion.
+- Documents live in their own files (`ChatStore.readDocuments` / `getDocument` / `saveDocument`). A write never rewrites the transcript, so parallel writers touch only their own file. The record keeps `readingDocumentId` (view state) and `roadmapSlug` (quick-start identity).
+- Section ids are permanent slugs; headings are labels and must stay unique (the TOC must not lie). `revision` bumps on every write.
+- A roadmap subtopic's blurb starts as the placeholder `Overview not written yet.` until a writer describes it.
+- The pure patch engine is [`core/study-document.ts`](../src/core/study-document.ts): edits, suggestion and subtopic writes, question appends, whole-document validation (`studyDocumentProblems`), the skeleton projection, and tree helpers. Roadmap subtopics can never be dropped by an edit or a direction refresh; agent directions are added beside them.
 
-The pane derives its chapter list from the sections and its tree from the parent links. The body is markdown rendered through the same `MessageResponse` pipeline as chat (LaTeX, mermaid, code, tables).
+## Who writes what
 
-## The agent
+| Work | Writer | Trigger |
+|---|---|---|
+| First document, revisions, chat answers | the chat turn (read agent) | learner messages |
+| Roadmap Overview | the opening chat turn | the roadmap card's opening message |
+| Every roadmap subtopic overview | background writers (batches of ≤24 per topic) | queued when the opening turn starts |
+| A roadmap topic's summary | background writer | the learner opens the topic |
+| A deep dive (child document) | background writer | a direction / subtopic card, or the map |
+| More self-check questions | background writer | "Generate more questions" / "Add self-check questions" |
+| Fresh directions | background writer | the refresh control on a chapter |
 
-- New `AgentKind: "read"` and `createReadAgent`.
-- Prompt directory `src/agent/prompts/read/`:
-  - `00-base.md` — the job, the immediate first write, the living-document mechanics, the short steering chat, the tools, the prohibitions.
-  - `10-doctrine.md` — how to write a good study document and how to revise it.
-  - `20-deeper.md` — the document tree, suggestion turns, child-document doctrine, related links, and bounds.
-- Shared prompt appendix (curated): voice, accuracy, learner files, formatting. The thinking-field and question-tool fragments stay out.
-- Tool registry (`createReadTools`): `edit_document`, `read_document`, `describe_subtopics`, `suggest_deeper`, `list_documents`, `read`, `ls`, `find`, `grep`, `research`, `pdf` (the job tools remain user-toggleable).
-- Built from turn 1, like practice: no prober→teacher split.
+### The chat agent
 
-### Document tools
+- `AgentKind: "read"`, prompts in `src/agent/prompts/read/` (`00-base` job and mechanics, `10-doctrine` writing standard, `20-deeper` the tree) plus the shared voice/accuracy/files/formatting appendix.
+- Tools: `edit_document`, `read_document`, `describe_subtopics`, `add_questions`, `suggest_deeper`, `list_documents`, learner files, `research`, `pdf`, and (gated) `list_sessions` / `list_propositions`.
+- An omitted `documentId` means the document open **when the turn started** (`defaultDocumentId`, pinned by the handler). A `read-context` marker tells the model which document that is whenever it changes.
 
-- **`edit_document`** — server-executed. Upserts sections by id, removes by id, reorders with `order`, renames with `title`, replaces cross-links with `related`, and (on a section patch) carries `suggestions` (2–4 deeper directions) and `questions` (1–3 self-check Q&A pairs). The first call must set the title. Validation failures return `ok:false` with the problems (the `plan_init` retry pattern). Writes the target document through `ChatStore.saveDocument` and emits `document-changed`.
-- **`read_document`** — returns one document (or one section), targeted by id.
-- **`describe_subtopics`** — writes the generated one-line overviews of a chapter's roadmap subtopics by id, without changing titles or roadmap pointers. Parallel batches merge safely.
-- **`suggest_deeper`** — regenerates one chapter's directions (the refresh path).
-- **`list_documents`** — the whole tree with ids, chapter ids, suggestions, and related links.
+### Background writers
 
-The pure patch engine is `src/core/study-document.ts`: `applyStudyDocumentEdit`, `applyStudySuggestions`, `applyStudySubtopicBlurbs`, `StudyDocumentError`, TOC/markdown/outline/word-count projections. All shape judgments live there, not in the store.
+- [`agent/read-writer.ts`](../src/agent/read-writer.ts): a stateless sub-agent per task with its own prompt (`prompts/read-writer/00-writer.md` + the read doctrine + shared voice/accuracy/formatting), a brief carrying exactly the text it builds on, and **scoped tools**: it can read anything but write only its target document (and, for a summary, only its one section).
+- [`server/read-writers.ts`](../src/server/read-writers.ts): the queue. One task per key (kind + target), so repeated clicks join the running task. At most 8 running per session; the process-wide worker request pool still caps provider requests. Usage goes into the session's `turns` ledger.
+- Settlement checks delivery: a deep dive with no sections becomes `failed` (Retry reuses the child id); a summary that left the section a seed, or subtopics left pending, count as failed. A failure is remembered for 30 minutes so an automatic summary does not re-fire; explicit Retry clears it.
+- Each writer is a row in the sidebar's Background agents strip ("Document writer"), with the END control to stop it.
+- Crash recovery: a child still `writing` with no live writer is finalized on the pane's next document read.
 
-Document writes are serialized per session even though the tools run in parallel, so several independent `edit_document` / `describe_subtopics` / `suggest_deeper` calls can share a batch without clobbering each other.
-
-## Live updates
-
-- `edit_document` / `suggest_deeper` save the record and emit `document-changed` (`{chatId, documentId?}` — tiny payload, notify-then-fetch).
-- `GET /api/chats/[id]/document` returns `{document, documents, readingDocumentId}`. The pane refetches on the event.
-- The pane also refetches on `turn-settled` (belt and suspenders) and on SSE reconnect.
-- A mid-turn document write updates the pane without touching the client's streaming message state — that is why the event is separate from `record-changed` (which the chat view ignores while a turn runs).
-- The transcript gets a quiet `Document updated · …` line from the document card; the document body never duplicates into chat.
-
-## Compaction
-
-- `read` joins the compaction kind union.
-- The read summarizer prompt preserves **the learner's steering** and **the document's title + section list**, not the body (the body is in the record; the future agent calls `read_document`).
-- The document remains the canonical state through the record.
-
-## Turn boundaries
-
-`needsContinuation` ignores clean `edit_document`/`read_document` results. Without this, a turn ending right after a document write would wake a phantom continuation turn on reload. This is the read-mode sibling of the practice problem-pose exclusion.
-
-## Extraction
-
-Only teach sessions extract. `chat-handler` gates extraction on `(record.kind ?? "teach") === "teach"`; read and practice write nothing to the graph. The coverage ring is hidden in read sessions for the same reason.
-
-## UI surfaces
-
-- Home mode switch: Teach / Practice / Read (book icon).
-- Sidebar: a third creation door, a fourth kind filter, a book icon on read rows.
-- Draft: `/chat/new?mode=read`, reading copy, no graph picker.
-- Session: Read tag instead of the phase chip; Chat chip toggles the floating conversation panel; no coverage ring; read composer placeholder.
-- `ReadPane` (`components/read-pane.tsx`): full-main-area reading surface below the TopBar; h-15 header, title/fallback session title, section count + reading time, TOC rail at wide widths / sticky chip row at narrow, independently scrolling article, active-section tracking, empty/writing states. No close affordance — the document is the mode's main view.
-- `DocumentCard` (`components/artifacts/document-card.tsx`): the quiet transcript line for `edit_document`; `read_document` is invisible after settle.
-- Chat panel: bottom-right floating card (~30rem wide, up to ~34rem tall), a slim Conversation header with close, the ordinary transcript and composer inside. Hidden (but mounted) when closed, so drafts and scroll state survive toggling. It overlays the document at every width.
-
-## Packaging
-
-The prompt loader reads `src/agent/prompts/` at runtime, so `next.config.ts` explicitly includes the whole tree in the standalone trace, and `scripts/build-server.mjs` sanity-checks a read prompt asset alongside the teacher asset.
-
-## Tests
-
-- `tests/study-document.test.ts` — pure patch engine: first title, upsert, append, duplicate id/heading, remove, reorder, projections.
-- `tests/read-agent.test.ts` — prompt composition, registry shape, edit/read execution against a fake store, continuation exclusion, read compaction prompt.
-- `tests/render-read-pane.test.tsx` — pane surface, empty/writing states, live-write predicate, reading time.
-- `tests/chat-kind.test.ts` — read kind stamping + document stays out of the list payload.
-- `tests/render-new-session.test.tsx` — read draft creation body and copy.
-
-## Explicitly not in v1
-
-- Direct learner editing or inline annotations.
-- Export/print/copy-to-clipboard of a guide.
-- Find-in-document (session find still covers the transcript only).
-- Interactive demos/SVG figures inside the document.
-- Knowledge-graph extraction or a "save to graph" action (the deeper tree is its own graph, not graph evidence).
-- Document version history or undo.
-- Manual cross-link creation (the agent authors them; the learner can remove).
-- Resizable chat-panel dimensions.
-
-## Deeper topics — the document graph (2026-11-12)
-
-Read is no longer one flat guide. Each chapter can grow a **child study
-document** for one of its suggested directions, and those children can grow
-their own, recursively. The record holds a tree; the pane presents it as a
-hidden contents drawer plus an optional topic graph.
-
-### Owner decisions (2026-11-12)
-
-- **Drill into a child document**, not inline expansion and not a new read
-  session. Same session, same shared chat.
-- **Directions ship with the chapter**, authored in the same
-  `edit_document` patch: every new or substantially revised section carries
-  2–4 deeper directions, so the learner sees them immediately. The
-  "Go deeper" click is the regeneration/repair path, not the first reveal.
-- **Self-check questions ship with the chapter too**, hidden in a collapsed
-  accordion: 1–3 questions with model answers. The learner answers privately
-  and then opens the answer. This is not a graded quiz or a question tool.
-- **Switch immediately**: the pending child opens with a writing state and
-  sections stream in as `edit_document` calls land.
-- **Chat steers the open document.** Switching documents switches the
-  target; history stays shared.
-- **Hidden tree sidebar + breadcrumb**, and an optional **graph view** with
-  document nodes, chapter nodes, and agent-authored cross-links.
-- **Cross-links are agent-authored automatically** when it writes a child;
-  the learner can remove a wrong link from the reading footer.
-- Rejected: inline nested sections (one document grows too long), a new read
-  session per topic (exploring becomes session switching), and zero
-  cross-links (the owner wants a real topic graph).
-
-### Data model
-
-`ChatRecord` keeps the root in `document` and adds:
-
-```ts
-documents?: StudyDocument[];      // children, tree derived from parent links
-readingDocumentId?: string;       // chat steering target (view state)
-roadmapSlug?: string;             // quick-start identity (imported preset)
-```
-
-`StudyDocument` adds `id` (`"root"` or `doc_…`), `parent` (the chapter and
-suggestion that spawned it), `related`, and `status` (`writing | ready |
-failed`; absent reads ready). `StudySection` adds `suggestions` (stable
-slug, heading, blurb, optional existing `documentId`/`sectionId`) and
-`questions` (stable slug, question, answer).
-
-`StudyRelatedLink` is document-level: `{documentId, sectionId?, reason}`.
-The graph draws it dashed; the reading footer lists it.
-
-Bounds: 50 documents per session, six levels below the root, twelve suggestions
-per `edit_document` call (roadmap seeds may carry the full subtopic list; use
-`describe_subtopics` to update it by id) and twenty questions per chapter (the initial pass writes 1–3; “Generate more questions” adds more). Section/body/total limits stay as
-before per document.
-
-### The turns
-
-The learner's clicks are hidden session markers, not chat bubbles:
-
-- `suggest-deeper` → `read-suggest` marker. This is the regeneration path
-  (refresh, or a chapter authored before directions existed). The agent
-  reads the chapter and calls `suggest_deeper`; the pane renders the chips.
-- `go-deeper` → the server pre-creates the child (`status:"writing"`), makes
-  it the active document, then appends a `read-deeper` marker and starts the
-  writer turn. The agent writes with `edit_document` and the child's id.
-- `more-questions` → `read-questions` marker. The agent reads the chapter,
-  keeps the existing questions, and adds 2–3 new ones with `edit_document`.
-- Ordinary chat text gets a `read-context` marker when the open document
-  changed (or after compaction), so "expand this" targets what is on screen.
-
-Turn settlement finalizes any `writing` document: sections landed → `ready`;
-none → `failed` (the pane offers Retry, which reuses the same child id).
-
-### Tools
-
-- `edit_document` — `documentId` target (omit = active document), `related`
-  replace-whole, and the existing section patch/remove/order fields.
-- `read_document` — one document or one section, targeted.
-- `suggest_deeper` — store 2–4 directions for one chapter.
-- `describe_subtopics` — write roadmap subtopic overviews by id, in
-  parallel-safe batches.
-- `list_documents` — the whole tree with section ids, suggestion ids and
-  related links; the agent's map for suggestions and cross-links.
-- The document tools are internal work for the continuation fold (no
-  phantom wake).
-
-The prompt's `read/20-deeper.md` carries the doctrine: a child continues
-from its parent chapter, delivers the chosen direction, avoids duplicates,
-and links only genuinely related documents.
-
-### API
-
-- `GET /api/chats/[id]/document` → `{document, documents, readingDocumentId}`.
-- `POST /api/chats/[id]/document/active` → remember the open document.
-- `POST /api/chats/[id]/document/suggest` → start the suggestion turn.
-- `POST /api/chats/[id]/document/deeper` → create/reopen the child, start
-  the writer turn, return it.
-- `POST /api/chats/[id]/document/questions` → generate more self-check
-  questions for one chapter.
-- `POST /api/chats/[id]/document/related/remove` → drop one cross-link.
-
-`document-changed` carries `{chatId, documentId}` (optional for old
-listeners); the pane refetches all documents on a short debounce.
-
-### UI notes
-
-- The header's contents button opens a drawer: root → chapters → spawned
-  child under the chapter. Writing/failed status dots; clicking a chapter
-  opens its document at that section. Breadcrumb and back button for the
-  document chain.
-- Inline "Go deeper" at the end of every chapter: the authored 2–4 cards
-  with title/blurb and an Open/Write/Retry/Writing state. A refresh control
-  regenerates directions; a chapter with none still offers a quiet
-  "Suggest deeper topics" button.
-- Self-check questions render above the deeper block as a native `<details>`
-  accordion, collapsed by default. Opening it lists each question; opening a
-  question reveals its model answer. A **Generate more questions** button at
-  the end of the accordion asks the agent for 2–3 additional questions while
-  keeping the existing set. A chapter without questions renders nothing.
-- Related links render as a footer list with a remove affordance.
-- The graph toggle opens a dagre-laid-out SVG (documents left, chapters
-  right, deeper branches further right; dashed related curves). Chapter
-  nodes open their document at that section. Pan/zoom uses the shared
-  pan-zoom math; Fit recenters.
-- The tree drawer is an overlay at every width; the narrow chapter chip row
-  stays as a quick-jump strip.
-
-### Tests
-
-- `tests/study-document.test.ts` — authored suggestions/questions, child
-  creation, depth, breadcrumb, related links, tree text.
-- `tests/read-agent.test.ts` — tool registry, targeted child edits,
-  `describe_subtopics`, serialized parallel edits, `suggest_deeper`,
-  `list_documents`, prompt paths.
-- `tests/read-deeper-input.test.ts` — parse + hidden markers + active-document
-  context.
-- `tests/read-document-route.test.ts` — GET shape, active-document route,
-  target validation.
-- `tests/read-graph.test.ts` — graph projection, ghost suggestions, generated-child suppression, deterministic layout.
-- `tests/roadmap-seed.test.ts` — roadmap.sh import seed behavior.
-- `tests/render-read-pane.test.tsx` — drawer, breadcrumb, suggestions,
-  self-check accordion and “Generate more questions”, related links, graph
-  toggle, failed/empty states.
-- `tests/chat-kind.test.ts` — child upsert + list payload exclusion.
-
-Status: implemented 2026-11-12.
-
-
-## Roadmap presets — roadmap.sh (2026-11-13)
-
-A read session about a known topic can start from an imported roadmap
-instead of a blank guide. Angular is the first preset, built from the
-[roadmap.sh Angular roadmap](https://roadmap.sh/angular).
-
-### Import
+## Roadmap presets
 
 ```bash
 npm run roadmap:catalog
 npm run roadmap:import -- all      # or: npm run roadmap:import -- angular
 ```
 
-`scripts/import-roadmap-catalog.mjs` fetches roadmap.sh's roadmap catalog
-(102 roadmaps) into `data/roadmaps/catalog.json`. `scripts/import-roadmap.mjs`
-fetches each official graph (`/api/v1-official-roadmap/<slug>`), imposes the
-read-mode tree, and writes `data/roadmaps/<slug>.json` under the mutable
-data dir (gitignored). `all` imports every catalog roadmap; the Angular
-preset uses a curated 6-track mapping (26 topics, 132 subtopics), every
-other roadmap uses the visual group/nearest-topic fallback (one track,
-topics in visual order). Only labels and hierarchy are stored — never
-roadmap.sh prose.
+The catalog (102 roadmaps) and each roadmap's labels/hierarchy are imported into `data/roadmaps/` (gitignored runtime data). Angular has a curated six-track mapping; every other roadmap is one track in visual order.
 
-### Quick start and jump
+- The read draft's **Start from a roadmap** grid and the in-session **Roadmaps** chip open the catalog. A card is **Open** when a read session for it exists, otherwise **Start**.
+- Starting creates a read session with `roadmapSlug`; the root is seeded with an Overview plus every main topic as a seed section whose subtopics are suggestions.
+- Opening a subtopic starts a deep dive whose writer gets a `Roadmap subtopic: … (topic: …, track: …)` context line.
+- The **roadmap map** (graph toggle on a seeded root) is a roadmap.sh-style poster in theme colors: topics on a spine, subtopic boxes alternating sides, status dots for generated children.
 
-The read draft shows a **Start from a roadmap** grid: suggested roadmaps
-(Angular, React, Node.js, Python, DevOps, System Design, …), with existing
-read sessions first. **Browse all** opens the full searchable catalog
-grouped by roadmap.sh categories. A **Roadmaps** chip in a read session's
-top bar opens the same browser, so the learner can jump to another roadmap
-without going back to the draft.
+roadmap.sh's notice allows personal use. The app stores only labels and hierarchy and links to the source. Do not commit imported data or redistribute roadmap prose. Note that the local server is reachable through the `lh.pugg.in` tunnel ([local-deploy.md](local-deploy.md)); keep that tunnel personal.
 
-Each catalog card is **Open** when a read session for that roadmap already
-exists (newest first), otherwise **Start**. Starting creates a read session
-with the roadmap's title, seeds its graph (when a preset is imported), and
-hands the opening prompt to the chat page. The session record carries
-`roadmapSlug`, the quick-start identity used for the existing-session badge
-and jump.
+## Graph features
 
-### The seeded opening
+- **Save to graph** (header button, per document): sends the document's written sections through the notes-import pipeline (extractor → auditor → merger). The source path is `Reading/<session>/<document>.md`, so saving again re-runs against the same source. Seed placeholders are never sent. Progress shows in Background agents.
+- **Teach me** (per written chapter): creates a Teach session whose first message is a hidden `read-chapter` marker carrying the chapter's text, then opens it on "Teach me <heading>". The prober still probes: reading a chapter is not holding it.
+- **Graph-map reader**: when the graph and graph-tools switches are on, the read agent and summary/deep-dive writers can list what the learner already holds, treat it as known ground, and link to it. They never mention the graph in the document.
 
-`POST /api/chats` (read only) calls `seedRoadmapForChat` when the opening
-title names an imported roadmap. The root document starts with **every
-main topic as a real section**:
+## The pane
 
-- an **Overview** section with the source link and usage note;
-- **26 topic sections**, each one-line seed body naming its subtopics;
-- each topic's **roadmap subtopics as suggestions**, carrying
-  `roadmap: {slug, nodeId, kind:"subtopic"}` pointers;
-- a document-level `roadmap` field with the track grouping and source.
+- `GET /api/chats/[id]/document[?documentId=]` returns every document as a **skeleton** (no bodies or answers) plus the shown document in full, and the session's writer state. The pane caches full documents by revision and fetches a skeleton in full when it is opened.
+- Header: contents drawer (the whole tree), back + breadcrumb, title, section count and reading time, writing indicator (counts parallel writers), Save to graph, graph toggle.
+- Wide screens: a persistent **Sections** rail for the open document. Narrow screens: a sticky chapter chip row.
+- Per chapter: Teach me, the body (or the seed's waiting / writing / failed + Retry state), the self-check accordion (or "Add self-check questions"), and the directions (roadmap subtopics collapsed in an accordion on a seeded root).
+- Related links render as a footer with a remove control.
+- The conversation is a floating panel, closed by default; the Chat chip shows a dot for an unseen reply or an error, and a turn error opens the panel.
 
-This is the whole subject at a glance: the initial document lists all main
-topics, and the roadmap map shows every topic and subtopic before the
-learner commits a turn to any of them.
+## API
 
-The read agent's opening rule for a seeded root is to keep every section
-and suggestion, expand each one-line seed into a 2–4 sentence summary in
-roadmap order, give **every roadmap subtopic** a 1–2 sentence overview with
-`describe_subtopics`, and add self-check questions where they fit. It splits
-the work into several calls and issues them together in parallel batches;
-writes serialize per session. It does not replace the map with a new
-outline. Subtopic deep dives are separate child documents started by
-clicking a subtopic.
+| Route | Does |
+|---|---|
+| `GET /api/chats/[id]/document` | skeletons + shown document + writers |
+| `POST …/document/active` | remember the open document (`readingDocumentId`) |
+| `POST …/document/deeper` | create/reopen a child, queue its deep-dive writer |
+| `POST …/document/summary` | queue a seed topic's summary (`retry` to re-fire a failure) |
+| `POST …/document/questions` | queue a more-questions writer |
+| `POST …/document/suggest` | queue a fresh-directions writer |
+| `POST …/document/related/remove` | drop one cross-link (no model call) |
+| `POST …/document/graph` | save one document to the knowledge graph |
+| `POST /api/chats` with `readChapter` | start a Teach session from a chapter |
+| `POST /api/activity/abort` with `kind: "read"` | stop a background writer |
 
-The subtopic overviews are visible in the collapsed Roadmap subtopics
-cards and the roadmap map's hover title. The full subtopic deep dive is
-still generated on click.
+`document-changed` (`{chatId, documentId}`) fires after every document write and every writer enqueue/settle; the pane refetches on a short debounce, on `turn-settled`, and on SSE reconnect.
 
-### Deep dives
+## Compaction, turns, extraction
 
-Clicking a subtopic suggestion (inline card, contents ghost, or map leaf)
-creates a child document and starts the writer with a `Roadmap context:`
-line. The child is a focused deep dive one level below its main topic; it
-gets its own sections, directions and questions. The parent pointer keeps
-the main topic/track context.
+- The read summarizer keeps the learner's steering and the document tree (titles and section ids), never bodies; the agent re-reads with `read_document`.
+- A clean document-tool result owes no continuation (no phantom wake after reload).
+- Read sessions never extract automatically; "Save to graph" is the explicit path.
 
-### Background agents
+## Tests
 
-While a read document tool is working, the sidebar's **Background agents**
-strip shows a "Guide writer" row for that session: the session title plus
-the current activity ("Writing summaries · Components", "Subtopic
-overviews · Components (12)", "Adding self-check questions"). It starts
-when a roadmap generation turn begins (and on the first document write for
-other edit turns) and clears at turn settlement. Cost/context read
-"—" because the turn's usage lands in the session ledger at settlement.
-There is no abort control on this row; the chat's Stop button owns the
-foreground turn.
+- `study-document.test.ts` — the patch engine, tree helpers, limits.
+- `read-agent.test.ts` — prompt, registry (incl. gated graph tools), edits, pinned target under mid-turn navigation, question append.
+- `read-writer.test.ts` — writer prompt, briefs, scoped tools.
+- `read-document-route.test.ts` — skeleton GET, parallel deep dives, the per-session cap, lazy summary failure/retry, migration, Teach handoff.
+- `roadmap-seed.test.ts` — explicit-slug seeding, lazy seed shape, **every imported roadmap** passes validation, subtopic writer batches.
+- `read-deeper-input.test.ts` — the read-context marker; removed click inputs are refused.
+- `render-read-pane.test.tsx`, `read-graph.test.ts`, `read-roadmap-graph.test.ts`, `read-generation.test.ts`, `render-activity-dock.test.tsx`.
 
-### The roadmap map
+## Not built
 
-When the root carries a `roadmap` field, the graph toggle opens a
-roadmap.sh-style map instead of the compact document graph:
-
-- a large, tall canvas with the subject title at the top;
-- main-topic cards on a central primary spine (theme card + primary
-  accent);
-- each topic's subtopic cards in a bordered, muted group box to the left
-  or right, alternating;
-- solid primary spine segments and dashed primary branch connectors;
-- theme colors throughout (the layout is roadmap.sh's, not its palette);
-- track labels (Foundations, Templates & UI, …) across the canvas;
-- generated subtopics carry a primary status dot; writing pulses, failed
-  uses the destructive color.
-
-Main topic nodes open that section of the root guide. Subtopic nodes open
-the generated child or start its deep-dive turn. Pan, wheel zoom, fit width
-and fit-whole-map are available. The map is intentionally tall, like the
-roadmap.sh poster; it opens fit-to-width at the top.
-
-While the map is the full roadmap, the inline subtopic cards under a
-roadmap section are collapsed in a **Roadmap subtopics** accordion so the
-26-section guide stays readable. The contents drawer also lists each
-subtopic as a ghost row.
-
-### Tests
-
-- `tests/roadmap-seed.test.ts` — title match, the all-main-topic root
-  seed, track/topic/subtopic seeds, no-overwrite rule, catalog API badges,
-  route integration.
-- `tests/read-roadmap-graph.test.ts` — spine/side-box layout, alternating
-  branches, generated status, roadmap detection.
-- `tests/read-generation.test.ts` — Background agents read-generation
-  registry (one row per chat, updates, settlement clear).
-
-### Contract
-
-- Preset data is runtime state (`data/roadmaps/`), not source; a fresh
-  install has no preset until the import command runs.
-- The roadmap's copyright notice allows personal use; the app stores only
-  labels/hierarchy and links to the source. Do not commit imported data or
-  redistribute the roadmap's prose.
+- Learner editing or annotations; document version history or undo.
+- Export/print (`studyDocumentToMarkdown` exists and feeds Save to graph).
+- Find-in-document (session find covers the transcript only).
+- Live cost on writer rows (usage lands in the session ledger at settlement).
+- Resizable chat panel.

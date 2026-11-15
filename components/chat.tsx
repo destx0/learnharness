@@ -101,7 +101,7 @@ import { PluginSessionTopBarActions } from "@/components/plugin-chrome";
 import { usePluginShortcutPage } from "@/components/plugin-shortcuts";
 import { createPluginSessionActionContext, type PluginSessionViewInput } from "@/src/core";
 import type { SessionInputViewReader, SessionViewTargets, NativeQuestionViewState, ViewReaderRef } from "./session-view-readers";
-import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, QuestionFormDraft, StudyDocument, TurnUsage, SessionPricing } from "@/src/core";
+import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, QuestionFormDraft, StudyDocument, StudyWriterView, TurnUsage, SessionPricing } from "@/src/core";
 import type { LhViewMessage } from "@/src/core";
 import { PhaseChip, PhaseDivider } from "@/components/phase-divider";
 import {
@@ -275,6 +275,7 @@ export function Chat({
 	initialDocument = null,
 	initialDocuments = [],
 	initialReadingDocumentId = null,
+	initialWriters = [],
 	kind = "teach",
 }: {
 	chatId: string;
@@ -286,13 +287,16 @@ export function Chat({
 	 *  renders no phase chip and a Practice tag; read renders a Read tag,
 	 *  the reading pane, and no coverage ring. */
 	kind?: "teach" | "practice" | "read";
-	/** The read session's living document at page load (the record already
-	 *  carries it; the pane refetches on document-changed). */
+	/** The read session's root document at page load (legacy seam; the
+	 *  page passes every document through initialDocuments). */
 	initialDocument?: StudyDocument | null;
-	/** Deeper documents spawned from its chapters. */
+	/** Every study document: skeletons plus the reading document in full
+	 *  (the pane refetches on document-changed). */
 	initialDocuments?: StudyDocument[];
 	/** The document the learner was reading last (chat steering target). */
 	initialReadingDocumentId?: string | null;
+	/** The read session's background writers at page load. */
+	initialWriters?: StudyWriterView[];
 	initialPrompt?: string;
 	/** A teacher turn is running server-side but attached to no client
 	 * (navigated away mid-turn, returned while in flight). */
@@ -1256,11 +1260,35 @@ export function Chat({
 	 * part, not the turn's busy flag: the agent may be answering a chat
 	 * question without touching the document. */
 	const [readChatOpen, setReadChatOpen] = useState(false);
+	// The chip's unread badge: the conversation is closed by default, so a
+	// reply or an error landing while it is closed must still be visible.
+	const [readChatUnread, setReadChatUnread] = useState(false);
+	const seenAssistantCount = useRef<number | null>(null);
 	const [roadmapsOpen, setRoadmapsOpen] = useState(false);
 	const writingDocument = useMemo(
 		() => kind === "read" && documentWriteInFlight(messages),
 		[kind, messages],
 	);
+	// A new assistant reply while the floating conversation is closed lights
+	// the chip; a turn error opens the conversation (the error, the retry
+	// and the Stop control all live there).
+	const assistantCount = useMemo(() => messages.filter((m) => m.role === "assistant").length, [messages]);
+	useEffect(() => {
+		if (kind !== "read") return;
+		if (seenAssistantCount.current === null || readChatOpen) {
+			seenAssistantCount.current = assistantCount;
+			return;
+		}
+		if (assistantCount > seenAssistantCount.current) {
+			seenAssistantCount.current = assistantCount;
+			setReadChatUnread(true);
+		}
+	}, [kind, assistantCount, readChatOpen]);
+	useEffect(() => {
+		if (kind !== "read" || !error) return;
+		setReadChatOpen(true);
+		setReadChatUnread(false);
+	}, [kind, error]);
 	// The coverage ring's refresh chain (extraction-UX redesign): bumped at
 	// turn settle — the moment this session's uncovered mass changes.
 	const [coverageTick, setCoverageTick] = useState(0);
@@ -1751,6 +1779,7 @@ export function Chat({
 								onClick={(e) => {
 									blurAfterPointerClick(e);
 									setReadChatOpen((open) => !open);
+									setReadChatUnread(false);
 								}}
 								className={
 									"lh-no-drag flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium uppercase tracking-wide transition-colors " +
@@ -1761,6 +1790,13 @@ export function Chat({
 							>
 								<MessageCircleIcon className="size-3.5" aria-hidden />
 								Chat
+								{readChatUnread && !readChatOpen && (
+									<span
+										data-testid="chat-chip-unread"
+										aria-label={error ? "The conversation has an error" : "New reply in the conversation"}
+										className={cn("size-1.5 rounded-full", error ? "bg-destructive" : "bg-primary")}
+									/>
+								)}
 							</button>
 						</Hint>
 					)}
@@ -1830,6 +1866,7 @@ export function Chat({
 						initialDocument={initialDocument}
 						initialDocuments={initialDocuments}
 						initialReadingDocumentId={initialReadingDocumentId}
+						initialWriters={initialWriters}
 						sessionTitle={titleText}
 						writing={writingDocument}
 						className="absolute inset-0 z-0"

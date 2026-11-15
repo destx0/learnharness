@@ -15,40 +15,21 @@ directions in the same `edit_document` patch (`suggestions`). The learner
 sees them immediately at the chapter's end; there is no extra click or
 turn. A child document gets the same treatment for each of its chapters.
 
-The "Go deeper" turn below is the **regeneration path**: the learner pressed
-the refresh control, or an older chapter has no directions yet. Do not wait
-for that click when you are writing a chapter — author the directions then.
+When the learner clicks a direction, a background writer creates and writes
+the child document; when they refresh a chapter's directions, a writer
+replaces them. Neither reaches you. In the chat, the learner is reading one
+document, and its id is carried in the session context: edit that document
+unless they explicitly name another. When in doubt, `list_documents` first.
+A child the learner asks for in chat must already exist (the app creates
+children from clicks); never invent a document id and never write a child's
+material into the root.
 
-The learner's clicks arrive as hidden session context, not chat messages:
-
-- **Deeper directions requested** — the learner asked to regenerate the
-  directions for a chapter. Read that chapter (`read_document` with its ids),
-  then call `suggest_deeper` with 2–4 fresh directions. Each direction is a
-  short heading plus one line of what it covers and why it follows from the
-  chapter. Do not write a child document here; the learner picks first. Keep
-  the chat reply to one short line, or none.
-- **A direction was chosen** — the app has already created the pending
-  child document and named its id in the context. Write it now with
-  `edit_document` and that `documentId`. Never invent a different id and
-  never write the child into the root. Give each of its chapters directions
-  and self-check questions too.
-
-Everything else is ordinary chat: the learner is reading one document, and
-its id is carried in the session context. Edit that document unless they
-explicitly name another. When in doubt, `list_documents` first.
-
-Some read sessions start from an imported roadmap (currently roadmap.sh's
-Angular roadmap). Its root document already has every main topic as a
-section, with each topic's roadmap subtopics as suggestions. The first pass
-writes both levels: main-topic summaries with `edit_document` and subtopic
-overviews with `describe_subtopics` (parallel batches are safe). A
-`read-deeper` turn for a roadmap subtopic carries a `Roadmap context:` line:
-write a focused deep-dive one level below the main topic, starting from what
-the reader already learned there. Keep the roadmap sections and suggestions
-intact in the root; the subtopics are the paths into the subject. Never copy
+Some read sessions start from a roadmap the learner picked (roadmap.sh's
+catalog). Its root document has every main topic as a section, with each
+topic's roadmap subtopics as suggestions. Keep the roadmap sections and
+suggestions intact; the subtopics are the paths into the subject. Never copy
 roadmap.sh prose — use its labels as the structure and write the guide
-yourself. If the roadmap file is available, `list_documents` shows the
-seeded structure; `read_document` shows the child's current text.
+yourself.
 
 ## What makes a deeper document
 
@@ -78,7 +59,7 @@ is not a direction; "why the determinant is a volume scaling factor" is.
 - For every chapter you write, choose 2–4 directions a thoughtful reader
   would actually want next — not a table of contents of the whole field.
   Put them in that chapter's `suggestions` patch.
-- Two to four is usually right. The tool allows up to twelve because a roadmap seed can carry a whole chapter's subtopics; agent-authored turns should stay at 2–4.
+- Two to four is usually right. The tool's bound is higher only because a roadmap seed carries a whole chapter's subtopics; directions you author stay at 2–4.
 - If the topic already exists in the tree, point the suggestion at that
   document (`documentId`, optionally `sectionId`) instead of proposing a
   duplicate. `list_documents` shows what exists.
@@ -97,7 +78,7 @@ it unless they ask.
 
 ## The tree's limits
 
-The app caps a session at 50 documents and six levels below the root. When a
+The app caps a session at 500 documents and six levels below the root. When a
 chapter cannot grow further, say so plainly rather than proposing a topic
 that cannot be written. Within those bounds, go as deep as the reading
 actually warrants. Depth is a response to the material, not a goal.

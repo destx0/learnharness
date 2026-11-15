@@ -8,7 +8,8 @@
  * Mechanisms live in their domains — abortJob (server/jobs.ts, agents
  * stream), abortExtraction (the pipeline module, graph stream), and
  * abortTurn (server/turn-runs.ts, the running-turn registry); this route
- * is the thin composition.
+ * is the thin composition. A "read" row is a background document writer
+ * (server/read-writers.ts; id = the row id "read:<task>"): not_found -> 404.
  *
  * Outcomes: a job's not_found -> 404, not_running -> 409, aborted -> 200.
  * A turn mirrors the job semantics: not_running -> 409 (honest "nothing to
@@ -17,7 +18,7 @@
  * Extraction abort is idempotent by design (aborting with nothing in
  * flight is success — the blob is gone either way) -> 200.
  */
-import { abortExtraction, abortJob, abortPluginWorkerActivity, abortTurn } from "@/src/server";
+import { abortExtraction, abortJob, abortPluginWorkerActivity, abortReadWriter, abortTurn } from "@/src/server";
 
 export async function POST(req: Request) {
 	let body: unknown;
@@ -27,8 +28,8 @@ export async function POST(req: Request) {
 		return Response.json({ error: "Invalid JSON body" }, { status: 400 });
 	}
 	const { kind, id } = (body ?? {}) as { kind?: string; id?: string };
-	if ((kind !== "job" && kind !== "plugin-worker" && kind !== "extraction" && kind !== "turn") || typeof id !== "string" || id === "") {
-		return Response.json({ error: 'Body must be {kind: "job"|"plugin-worker"|"extraction"|"turn", id: string}' }, { status: 400 });
+	if ((kind !== "job" && kind !== "plugin-worker" && kind !== "extraction" && kind !== "turn" && kind !== "read") || typeof id !== "string" || id === "") {
+		return Response.json({ error: 'Body must be {kind: "job"|"plugin-worker"|"extraction"|"turn"|"read", id: string}' }, { status: 400 });
 	}
 	if (!/^[A-Za-z0-9:_-]+$/.test(id)) {
 		return Response.json({ error: "Invalid id" }, { status: 400 });
@@ -44,6 +45,10 @@ export async function POST(req: Request) {
 	}
 	if (kind === "plugin-worker") {
 		if (!abortPluginWorkerActivity(id)) return Response.json({ ok: false, reason: "not_found" }, { status: 404 });
+		return Response.json({ ok: true });
+	}
+	if (kind === "read") {
+		if (!abortReadWriter(id)) return Response.json({ ok: false, reason: "not_found" }, { status: 404 });
 		return Response.json({ ok: true });
 	}
 	if (kind === "turn") {

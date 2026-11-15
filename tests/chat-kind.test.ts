@@ -82,7 +82,7 @@ describe("session kind (practice sessions, 2026-10-04)", () => {
 		assert.equal(listed?.kind, "read");
 	});
 
-	it("the living document rides the record but stays OUT of the list payload", () => {
+	it("the living document lives beside the record and stays OUT of the list payload", () => {
 		const chat = chatStore.createChat("read with a guide", "read");
 		chatStore.saveDocument(chat.id, {
 			id: "root",
@@ -91,7 +91,8 @@ describe("session kind (practice sessions, 2026-10-04)", () => {
 			revision: 1,
 			updatedAt: new Date().toISOString(),
 		});
-		assert.equal(chatStore.getChat(chat.id)?.document?.title, "A guide");
+		assert.equal(chatStore.getDocument(chat.id, "root")?.title, "A guide");
+		assert.equal(chatStore.getChat(chat.id)?.document, undefined, "record version 5: documents are files, not record fields");
 		const listed = chatStore.listChats().find((c) => c.id === chat.id);
 		assert.ok(listed);
 		assert.equal("document" in listed!, false, "the sidebar list must not carry the whole guide");

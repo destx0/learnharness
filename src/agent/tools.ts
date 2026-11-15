@@ -440,13 +440,17 @@ export interface ReadToolContext extends DocumentToolContext {
 	jobStore: JobStore;
 	spawn: (job: JobRecord, input: ResearchInput | DemoInput | VisualInput | PdfInput) => void;
 	searchAvailable?: () => boolean;
+	/** The graph-map reader (2026-11-15, the prober's two tools): present
+	 *  only when graphToolsEnabled(effective), so the reader can see what
+	 *  the learner already holds and skip or link it. */
+	graphStore?: GraphStore;
 }
 
 /**
- * The READ agent's registry: the two document tools + the learner-filesystem
- * set + research and PDF jobs. Deliberately absent: quiz/explain/ask (this
- * mode has no questions), plan_init, probe_done, demo/visual (diagrams are
- * authored inline as mermaid, not dispatched artifacts), and graph readers.
+ * The READ agent's registry: the document tools + the learner-filesystem
+ * set + research and PDF jobs + (gated) the graph-map reader. Deliberately
+ * absent: quiz/explain/ask (this mode has no questions), plan_init,
+ * probe_done, and demo/visual (diagrams are authored inline as mermaid).
  * The job tools remain user-toggleable through the same settings seam as
  * every other agent.
  */
@@ -463,7 +467,8 @@ export function createReadTools(
 	return healToolRecord(
 		filterEnabledTools(
 			{
-				...documentTools({ chatId: ctx.chatId, chatStore: ctx.chatStore }),
+				...documentTools({ chatId: ctx.chatId, chatStore: ctx.chatStore, defaultDocumentId: ctx.defaultDocumentId }),
+				...(ctx.graphStore ? proberGraphTools({ chatStore: ctx.chatStore, graphStore: ctx.graphStore }) : {}),
 				read: readTool,
 				ls: lsTool,
 				find: findTool,

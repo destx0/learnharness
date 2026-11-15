@@ -56,8 +56,7 @@ import { sideChats, type SideChatService } from "./side-chat.ts";
 import { SIDE_CONTEXT_BUDGET_ERROR, sideBudgetRetryDrops, sideContextWindow } from "./side-context-budget.ts";
 import { registerTurn, rememberTurnFailure, unregisterTurn } from "./turn-runs.ts";
 import { persistTurn, triggerExtraction, TurnPersistenceError } from "./turn-service.ts";
-import { finishReadGeneration, noteReadGeneration } from "../core/read-generation.ts";
-import { finalizeReadDocuments } from "./read-documents.ts";
+import { enqueueRoadmapSubtopicWriters } from "./read-writers.ts";
 import { hasProbeDone, hasUnresolvedQuestion, pendingPluginQuestionOf, pluginQuestionCallsOf, questionCallsOf } from "../core/native-messages.ts";
 import { samePluginQuestionOccurrence } from "../core/plugin-questions.ts";
 import { composeInstructions } from "../agent/teacher-agent.ts";
@@ -421,7 +420,7 @@ export async function handleChatInput(
 						const updates = sideConversationEntries({ messages: current.messages, sideChats: sideContext.snapshot(chatId) });
 						return updates.length ? [...current.messages, ...updates] : current.messages;
 					}
-					const next = input.type === "steers" ? input.steers.filter((entry) => !steerDelivered(current.messages, entry.id)) : inputAppends(current, input);
+					const next = input.type === "steers" ? input.steers.filter((entry) => !steerDelivered(current.messages, entry.id)) : inputAppends({ ...current, ...stores.chatStore.readDocuments(chatId) }, input);
 					const after = [...current.messages, ...next];
 					if (hasUnresolvedQuestion(after)) return current.messages;
 					const updates = sideConversationEntries({ messages: current.messages, sideChats: sideContext.snapshot(chatId) }, after);
@@ -537,7 +536,7 @@ export async function handleChatInput(
 			} else appends = submission.finish({ id: chatId, kind: record.kind, messages: record.messages });
 		} else appends = input.type === "steers"
 			? input.steers.filter((s) => !steerDelivered(record.messages, s.id))
-			: inputAppends(record, input);
+			: inputAppends({ ...record, ...stores.chatStore.readDocuments(chatId) }, input);
 	} catch (err) {
 		if (err instanceof ChatInputError) {
 			return Response.json({ error: err.message }, { status: 400 });
@@ -575,12 +574,17 @@ export async function handleChatInput(
 	}
 
 	turnClaimed = true;
-	// Roadmap generation is a foreground turn, but the Background agents
-	// strip should show what is being generated while the model plans and
-	// writes. The document tools update this row in place; settlement clears it.
-	const generationTurn = input.type === "go-deeper" || input.type === "more-questions" || input.type === "suggest-deeper" ||
-		(record.kind === "read" && record.document?.roadmap !== undefined && record.messages.length === 0);
-	if (generationTurn) noteReadGeneration(chatId, record.title, "Planning", "Planning the generation pass");
+	// The roadmap opening (lazy summaries, 2026-11-15): the chat turn writes
+	// only the Overview; every subtopic overview is written up front by
+	// parallel background writers, queued here once the turn has passed the
+	// model gates. Topic summaries wait until the learner opens a topic.
+	if (record.kind === "read" && record.messages.length === 0) {
+		try {
+			enqueueRoadmapSubtopicWriters(chatId);
+		} catch (err) {
+			console.error(`[chat ${chatId}] roadmap subtopic writers failed to queue:`, err);
+		}
+	}
 
 	// Write-ahead persistence: the input's native appends go on disk BEFORE
 	// the turn starts - the learner's answer is durable the instant the
@@ -749,9 +753,9 @@ export async function handleChatInput(
 	// uniform across kinds).
 	// READ BRANCH (owner design, 2026-11-04): a kind:"read" session builds
 	// the reader from turn 1 — the living-document tools + learner files +
-	// research/PDF. No probing, no plan, no questions, no problems, no
-	// graph tools, no demo/visual. The document lives on the record; the
-	// reading pane watches document-changed.
+	// research/PDF + (gated, 2026-11-15) the graph-map reader. No probing,
+	// no plan, no questions, no problems, no demo/visual. The documents live
+	// beside the record; the reading pane watches document-changed.
 	const constructed: TeachingAgent = buildAgent
 		? buildAgent({ ...agentOpts, teaching })
 		: record.kind === "practice"
@@ -783,6 +787,13 @@ export async function handleChatInput(
 						{
 							chatId,
 							chatStore: stores.chatStore,
+							// Pinned per turn (2026-11-15): an omitted documentId
+							// targets what the learner had open when the turn
+							// started, never whatever they navigate to mid-turn.
+							defaultDocumentId: record.readingDocumentId,
+							// The graph-map reader, behind the prober's gate: the
+							// reader sees what the learner already holds.
+							...(graphToolsEnabled(effective) ? { graphStore: stores.graphStore } : {}),
 							jobStore: stores.jobStore,
 							spawn: (job, input) => void jobRunner.runJob(job.id, input),
 							searchAvailable,
@@ -932,11 +943,6 @@ export async function handleChatInput(
 				// subsequent fetch reads the dismissal already in the record
 				// (the same ordering law as persistTurn itself).
 				applyParkedDismissal(stores.chatStore, chatId);
-				// Deep-document settlement: a child created "writing" becomes
-				// ready (content landed) or failed (the writer stopped empty)
-				// BEFORE endTurn emits turn-settled.
-				finalizeReadDocuments(stores.chatStore, chatId);
-				finishReadGeneration(chatId);
 				// Any helper activity after the last model call stays pending;
 				// settlement never injects it behind the agent's context.
 				// LAST: a poller that sees not-in-flight must read an already-persisted
@@ -1048,8 +1054,6 @@ export async function handleChatInput(
 		if (turnClaimed && !handedOff) {
 			try {
 				if (!preparation || preparation.isCurrent()) applyParkedDismissal(stores.chatStore, chatId);
-				finalizeReadDocuments(stores.chatStore, chatId);
-				finishReadGeneration(chatId);
 			} catch (err) { console.error(`[chat ${chatId}] parked dismissal failed:`, err); }
 			finally {
 				if (!preparation || preparation.isCurrent()) unregisterLiveAgent(chatId);

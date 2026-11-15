@@ -260,9 +260,10 @@ tree?: PlanTree;
 
 ### ChatRecord document
 
-The living study document (read sessions) — written by the read
-agent's edit_document tool via saveDocument. Absent on teach and
-practice records.
+LEGACY (record versions 3–4): the living study document stored
+inline. Version 5 moved every document into its own file
+(data/chats/<id>.docs/<docId>.json); getChat migrates these fields
+out on first read. Read documents through ChatStore.readDocuments.
 
 ```ts
 document?: StudyDocument;
@@ -270,9 +271,8 @@ document?: StudyDocument;
 
 ### ChatRecord documents
 
-Deeper documents spawned from chapters of the living document
-(read sessions). The tree is derived from each document's parent
-link; the root stays in `document` for pre-deeper compatibility.
+LEGACY (record versions 3–4): inline deeper documents — see
+`document`.
 
 ```ts
 documents?: StudyDocument[];
@@ -1266,6 +1266,7 @@ export interface StudySection {
     body: string;
     suggestions?: StudyTopicSuggestion[];
     questions?: StudySectionQuestion[];
+    seed?: boolean;
 }
 ```
 
@@ -1278,6 +1279,7 @@ export interface StudySection {
 - [body](#studysection-body)
 - [suggestions](#studysection-suggestions)
 - [questions](#studysection-questions)
+- [seed](#studysection-seed)
 
 ### StudySection id
 
@@ -1313,6 +1315,17 @@ Suggested self-check questions and their model answers.
 
 ```ts
 questions?: StudySectionQuestion[];
+```
+
+### StudySection seed
+
+A roadmap-seeded main topic whose summary is not written yet (lazy
+summaries). The body is a placeholder; the pane shows
+the subtopic list and asks a background writer for the summary when
+the learner opens the section. Any body write clears it.
+
+```ts
+seed?: boolean;
 ```
 
 ## StudySectionQuestion

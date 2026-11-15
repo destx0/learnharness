@@ -16,8 +16,8 @@
  */
 
 import type {
-	ChatRecord,
 	StudyDocument,
+	StudyDocumentSet,
 	StudyDocumentStatus,
 	StudyRelatedLink,
 	StudySection,
@@ -43,12 +43,17 @@ export const STUDY_TOTAL_MAX = 200_000;
 
 /** The deeper tree's bounds. Recursion is intentional, but a session must
  *  stay a readable record rather than an unbounded corpus. */
-export const STUDY_DOCUMENTS_MAX = 50;
+export const STUDY_DOCUMENTS_MAX = 500;
 export const STUDY_DEPTH_MAX = 6;
-export const STUDY_SUGGESTIONS_MAX = 12;
+/** Per-section ceiling. Roadmap seeds carry a topic's whole subtopic list
+ *  (the largest imported topic has 103); agent-authored directions stay at
+ *  2–4 by prompt doctrine, not by this bound. */
+export const STUDY_SUGGESTIONS_MAX = 200;
 export const STUDY_SUGGESTION_HEADING_MAX = 160;
 export const STUDY_SUGGESTION_BLURB_MAX = 240;
 export const STUDY_QUESTIONS_MAX = 20;
+/** One "more questions" append adds at most this many. */
+export const STUDY_QUESTIONS_APPEND_MAX = 5;
 export const STUDY_QUESTION_MAX = 300;
 export const STUDY_ANSWER_MAX = 4000;
 export const STUDY_RELATED_MAX = 12;
@@ -93,7 +98,7 @@ export function emptyStudyDocument(): StudyDocument {
 }
 
 /** All documents in a session, root first. */
-export function studyDocumentList(record: Pick<ChatRecord, "document" | "documents">): StudyDocument[] {
+export function studyDocumentList(record: StudyDocumentSet): StudyDocument[] {
 	const docs: StudyDocument[] = [];
 	if (record.document) docs.push(record.document);
 	for (const doc of record.documents ?? []) if (!docs.some((d) => d.id === doc.id)) docs.push(doc);
@@ -101,7 +106,7 @@ export function studyDocumentList(record: Pick<ChatRecord, "document" | "documen
 }
 
 export function studyDocumentById(
-	record: Pick<ChatRecord, "document" | "documents">,
+	record: StudyDocumentSet,
 	id: string,
 ): StudyDocument | null {
 	if (!id) return null;
@@ -135,7 +140,7 @@ export function studyDocumentToMarkdown(doc: StudyDocument): string {
 }
 
 export function studyDocumentChildren(
-	record: Pick<ChatRecord, "document" | "documents">,
+	record: StudyDocumentSet,
 	documentId: string,
 ): StudyDocument[] {
 	return studyDocumentList(record).filter((doc) => doc.parent?.documentId === documentId);
@@ -144,7 +149,7 @@ export function studyDocumentChildren(
 /** Root = 0; children increment. A missing/cyclic parent chain stops at the
  *  last resolvable document (never loops). */
 export function studyDocumentDepth(
-	record: Pick<ChatRecord, "document" | "documents">,
+	record: StudyDocumentSet,
 	documentId: string,
 ): number {
 	let depth = 0;
@@ -161,7 +166,7 @@ export function studyDocumentDepth(
 }
 
 export function studyDocumentBreadcrumb(
-	record: Pick<ChatRecord, "document" | "documents">,
+	record: StudyDocumentSet,
 	documentId: string,
 ): StudyDocument[] {
 	const chain: StudyDocument[] = [];
@@ -177,7 +182,7 @@ export function studyDocumentBreadcrumb(
 
 /** The child generated from one chapter suggestion, if it exists. */
 export function studyDocumentChildForTopic(
-	record: Pick<ChatRecord, "document" | "documents">,
+	record: StudyDocumentSet,
 	documentId: string,
 	sectionId: string,
 	topicId: string,
@@ -214,7 +219,7 @@ export function studyDocumentOutline(doc: StudyDocument): string {
 /** The whole deeper tree (titles, section ids, suggestion ids, related
  *  links) — the read agent's map for suggestions and cross-links. Bodies
  *  stay out; the agent reads one with read_document. Deterministic. */
-export function studyDocumentTreeText(record: Pick<ChatRecord, "document" | "documents">): string {
+export function studyDocumentTreeText(record: StudyDocumentSet): string {
 	const docs = studyDocumentList(record);
 	const lines: string[] = ["Document tree:"];
 	if (docs.length === 0) {
@@ -237,7 +242,7 @@ export function studyDocumentTreeText(record: Pick<ChatRecord, "document" | "doc
 				const suggested = section.suggestions?.length
 					? ` [deeper: ${section.suggestions.map((t) => `${t.id} (${t.heading}${t.documentId ? ` → ${t.documentId}${t.sectionId ? ` § ${t.sectionId}` : ""}` : ""})`).join("; ")}]`
 					: "";
-				lines.push(`${pad}  - ${section.heading} (${section.id})${suggested}`);
+				lines.push(`${pad}  - ${section.heading} (${section.id})${section.seed ? " [summary not written yet]" : ""}${suggested}`);
 			}
 		}
 		if (doc.related?.length) {
@@ -255,7 +260,7 @@ export function studyDocumentTreeText(record: Pick<ChatRecord, "document" | "doc
 
 /** Is another child allowed under this document? */
 export function studyDocumentCanGoDeeper(
-	record: Pick<ChatRecord, "document" | "documents">,
+	record: StudyDocumentSet,
 	documentId: string,
 ): boolean {
 	return studyDocumentList(record).length < STUDY_DOCUMENTS_MAX &&
@@ -403,20 +408,30 @@ export function applyStudyDocumentEdit(
 			}
 			if (patch.body !== undefined) {
 				const body = validateBody(patch.body, `sections["${patch.id}"]`, problems);
-				if (body !== undefined) existing.body = body;
+				if (body !== undefined) {
+					existing.body = body;
+					// A written body is the summary: the section stops being a
+					// lazy roadmap seed.
+					delete existing.seed;
+				}
 			}
 			if (patch.suggestions !== undefined) {
-				if (patch.suggestions.length === 0) delete existing.suggestions;
-				else {
-					// Keep imported-roadmap pointers when the agent re-sends a
-					// seeded suggestion without the UI-only reference.
-					const merged = patch.suggestions.map((suggestion) => {
-						if (!suggestion || typeof suggestion !== "object" || suggestion.roadmap) return suggestion;
-						const prior = existing.suggestions?.find((entry) => entry.id === suggestion.id);
-						return prior?.roadmap ? { ...suggestion, roadmap: prior.roadmap } : suggestion;
+				const seeded = (existing.suggestions ?? []).filter((entry) => entry.roadmap !== undefined);
+				if (seeded.length > 0) {
+					// Imported roadmap subtopics are the section's structure and
+					// can never be dropped by an edit: every seeded entry stays
+					// (its roadmap pointer and heading intact; a re-sent blurb
+					// updates it), and agent-authored directions are appended.
+					const sent = new Map(patch.suggestions.filter((entry) => entry && typeof entry === "object").map((entry) => [entry.id, entry]));
+					const kept = seeded.map((entry) => {
+						const blurb = sent.get(entry.id)?.blurb;
+						return typeof blurb === "string" && blurb.trim() ? { ...entry, blurb } : entry;
 					});
-					existing.suggestions = validateSuggestions(merged, documentId, patch.id, problems);
-				}
+					const keptIds = new Set(kept.map((entry) => entry.id));
+					const added = patch.suggestions.filter((entry) => !entry || typeof entry !== "object" || !keptIds.has(entry.id));
+					existing.suggestions = validateSuggestions([...kept, ...added], documentId, patch.id, problems);
+				} else if (patch.suggestions.length === 0) delete existing.suggestions;
+				else existing.suggestions = validateSuggestions(patch.suggestions, documentId, patch.id, problems);
 			}
 			if (patch.questions !== undefined) {
 				if (patch.questions.length === 0) delete existing.questions;
@@ -687,7 +702,16 @@ export function applyStudySuggestions(
 		const ids = current.sections.map((s) => s.id).join(", ") || "(none)";
 		throw new StudyDocumentError([`suggestions: no section with id "${sectionId}". Current ids: ${ids}`]);
 	}
-	const normalized = validateSuggestions(suggestions, current.id, sectionId, problems);
+	// Roadmap subtopics are structure, not regenerable directions: a refresh
+	// keeps them and replaces only the agent-authored ones.
+	const seeded = (section.suggestions ?? []).filter((entry) => entry.roadmap !== undefined);
+	const seededIds = new Set(seeded.map((entry) => entry.id));
+	const normalized = validateSuggestions(
+		[...seeded, ...suggestions.filter((entry) => !entry || typeof entry !== "object" || !seededIds.has(entry.id))],
+		current.id,
+		sectionId,
+		problems,
+	);
 	if (problems.length > 0) throw new StudyDocumentError(problems);
 	return {
 		...current,
@@ -700,7 +724,7 @@ export function applyStudySuggestions(
 /** The pending child document created when the learner picks a suggestion.
  *  The server owns the id; the agent fills the sections in. Pure. */
 export function createChildStudyDocument(
-	record: Pick<ChatRecord, "document" | "documents">,
+	record: StudyDocumentSet,
 	parentDocumentId: string,
 	sectionId: string,
 	topicId: string,
@@ -749,4 +773,105 @@ export function removeStudyRelatedLink(
 	if (remaining.length > 0) next.related = remaining;
 	else delete next.related;
 	return next;
+}
+
+/** Append new self-check questions to one chapter, keeping every existing
+ *  question (the "Generate more questions" path, 2026-11-15). The model
+ *  sends only the new pairs; ids that already exist are rejected so a
+ *  regenerated duplicate never silently overwrites an answer. Pure. */
+export function applyStudyQuestionsAppend(
+	current: StudyDocument,
+	sectionId: string,
+	questions: readonly StudySectionQuestion[],
+	now = new Date(),
+): StudyDocument {
+	const problems: string[] = [];
+	const section = current.sections.find((s) => s.id === sectionId);
+	if (!section) {
+		const ids = current.sections.map((s) => s.id).join(", ") || "(none)";
+		throw new StudyDocumentError([`questions: no section with id "${sectionId}". Current ids: ${ids}`]);
+	}
+	if (questions.length === 0) problems.push("questions: at least one new question is required");
+	if (questions.length > STUDY_QUESTIONS_APPEND_MAX) {
+		problems.push(`questions: ${questions.length} new questions; add at most ${STUDY_QUESTIONS_APPEND_MAX} at a time`);
+	}
+	const existing = section.questions ?? [];
+	const existingIds = new Set(existing.map((q) => q.id));
+	for (const [i, entry] of questions.entries()) {
+		if (entry && typeof entry === "object" && existingIds.has(entry.id)) {
+			problems.push(`questions[${i}]: "${entry.id}" already exists in this chapter — choose a new id`);
+		}
+	}
+	const added = validateQuestions(questions, "questions", problems);
+	const merged = [...existing, ...added];
+	if (merged.length > STUDY_QUESTIONS_MAX) {
+		problems.push(`questions: the chapter would have ${merged.length} questions; the limit is ${STUDY_QUESTIONS_MAX}`);
+	}
+	if (problems.length > 0) throw new StudyDocumentError(problems);
+	return {
+		...current,
+		sections: current.sections.map((s) => s.id === sectionId ? { ...s, questions: merged } : s),
+		revision: current.revision + 1,
+		updatedAt: now.toISOString(),
+	};
+}
+
+/** Every problem a whole document has, by the same rules edits enforce
+ *  (title, section ids/headings/bodies, unique headings, sizes, suggestion
+ *  and question shapes). Seeds built outside the edit engine (roadmap
+ *  imports) must pass this, or the first agent edit would be rejected for
+ *  a problem the agent did not cause. Empty = valid. */
+export function studyDocumentProblems(doc: StudyDocument): string[] {
+	const problems: string[] = [];
+	if (!STUDY_DOCUMENT_ID_RE.test(doc.id)) problems.push(`invalid document id "${doc.id}"`);
+	const title = doc.title.trim();
+	if (!title) problems.push("title must not be empty");
+	else if (title.length > STUDY_TITLE_MAX) problems.push(`title is longer than ${STUDY_TITLE_MAX} characters`);
+	if (doc.sections.length > STUDY_SECTIONS_MAX) problems.push(`the document has ${doc.sections.length} sections; the limit is ${STUDY_SECTIONS_MAX}`);
+	const ids = new Set<string>();
+	const headings = new Map<string, string>();
+	let total = 0;
+	for (const section of doc.sections) {
+		const label = `sections["${section.id}"]`;
+		if (!STUDY_SECTION_ID_RE.test(section.id)) problems.push(`${label}: invalid id`);
+		if (ids.has(section.id)) problems.push(`${label}: duplicate id`);
+		ids.add(section.id);
+		const heading = validateHeading(section.heading, label, problems);
+		if (heading !== undefined) {
+			const key = heading.toLowerCase();
+			const prior = headings.get(key);
+			if (prior !== undefined) problems.push(`headings must be unique: "${heading}" is used by both "${prior}" and "${section.id}"`);
+			else headings.set(key, section.id);
+		}
+		validateBody(section.body, label, problems);
+		total += section.heading.length + section.body.length;
+		if (section.suggestions && section.suggestions.length > 0) validateSuggestions(section.suggestions, doc.id, section.id, problems);
+		if (section.questions && section.questions.length > 0) validateQuestions(section.questions, `${label}.questions`, problems);
+	}
+	if (total > STUDY_TOTAL_MAX) problems.push(`the document is too large (${total} characters; the limit is ${STUDY_TOTAL_MAX})`);
+	return problems;
+}
+
+/** The pane's light projection of a document: structure, suggestions and
+ *  question prompts without section bodies or model answers. The tree
+ *  drawer, the graphs and the chapter cards need only this; the open
+ *  document is fetched whole. */
+export function studyDocumentSkeleton(doc: StudyDocument): StudyDocument {
+	return {
+		...doc,
+		sections: doc.sections.map((section) => ({
+			...section,
+			body: "",
+			...(section.questions ? { questions: section.questions.map((q) => ({ ...q, answer: "" })) } : {}),
+		})),
+	};
+}
+
+/** A roadmap subtopic's blurb before its overview is generated (the pane
+ *  renders it muted; the opening's background writers replace it). */
+export const STUDY_SUBTOPIC_PLACEHOLDER = "Overview not written yet.";
+
+/** Is this roadmap subtopic still waiting for its generated overview? */
+export function studySubtopicPending(suggestion: StudyTopicSuggestion): boolean {
+	return suggestion.roadmap !== undefined && suggestion.blurb === STUDY_SUBTOPIC_PLACEHOLDER;
 }

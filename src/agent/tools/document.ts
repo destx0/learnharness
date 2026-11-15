@@ -2,13 +2,14 @@ import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { serverExecute } from "../tool-execute.ts";
 import type { ChatStore } from "../../core/ports.ts";
-import type { ChatRecord, StudyRelatedLink, StudyTopicSuggestion } from "../../core/contracts/chat.ts";
+import type { StudyDocumentSet, StudyRelatedLink, StudyTopicSuggestion } from "../../core/contracts/chat.ts";
 import {
 	EDIT_DOCUMENT_TOOL,
 	READ_DOCUMENT_TOOL,
 } from "../../core/contracts/chat.ts";
 import {
 	applyStudyDocumentEdit,
+	applyStudyQuestionsAppend,
 	applyStudySubtopicBlurbs,
 	applyStudySuggestions,
 	StudyDocumentError,
@@ -18,6 +19,7 @@ import {
 	studyDocumentTreeText,
 	STUDY_BODY_MAX,
 	STUDY_HEADING_MAX,
+	STUDY_QUESTIONS_APPEND_MAX,
 	STUDY_QUESTIONS_MAX,
 	STUDY_QUESTION_MAX,
 	STUDY_RELATED_MAX,
@@ -31,53 +33,73 @@ import {
 	STUDY_ANSWER_MAX,
 } from "../../core/study-document.ts";
 import { emit } from "../../core/events.ts";
-import { noteReadGeneration } from "../../core/read-generation.ts";
 
 /**
  * The READ agent's document tools (read sessions, owner 2026-11-04; deeper
- * tree 2026-11-12).
+ * tree 2026-11-12; background writers 2026-11-15).
  *
- * The living study document is an artifact of the SESSION RECORD, not a
- * transcript message: edit_document patches it through the ChatStore (the
- * only writer), and the open reading pane refetches on the document-changed
- * event. That split is what lets the documents survive compaction, reloads,
- * and a conversation that runs far longer than its own context window.
+ * The living study documents are artifacts of the SESSION, not transcript
+ * messages: every write goes through ChatStore.saveDocument (one file per
+ * document since record version 5) and the open reading pane refetches on
+ * the document-changed event. That split is what lets the documents survive
+ * compaction, reloads, and a conversation far longer than its context.
  *
- * Deeper documents form a tree on the same record. Every tool targets one
- * document by id; an omitted id means the document the learner is reading
- * (the record's readingDocumentId), falling back to the root. The learner's
- * clicks — "suggest deeper directions" and "write this child" — arrive as
- * hidden session markers, so the agent can tell an automatic expansion
- * from ordinary chat.
+ * Two callers build these tools:
+ *   - the chat turn (the steering conversation). An omitted documentId
+ *     means `defaultDocumentId` — the document the learner had open WHEN
+ *     THE TURN STARTED, pinned by the handler. Reading the live
+ *     readingDocumentId instead would let a mid-turn navigation silently
+ *     retarget the agent's edits into another document.
+ *   - a background writer (server/read-writers.ts), which carries a
+ *     `scope`: writes outside the scope's document (and, for a topic
+ *     summary, outside its one section) are rejected, so parallel writers
+ *     cannot clobber each other's work.
  *
- * The tools are SERVER-EXECUTED like plan_init: the model's raw arguments
- * stream to the client for the live "Writing the document…" card, then the
- * execute seam validates and persists. Validation failures return ok:false
- * (the plan_init pattern) so the model retries in the same turn.
+ * Writes from both are serialized per session (withDocumentLock), so a
+ * read-modify-write never sees a half-applied sibling.
+ *
+ * The tools are SERVER-EXECUTED like plan_init: validation failures return
+ * ok:false with the problems so the model retries in the same run.
  */
+
+export interface DocumentToolScope {
+	/** The only document this caller may write. */
+	documentId: string;
+	/** When set, section patches may touch only this section (and the
+	 *  document's title/order/related/remove stay off-limits). */
+	sectionId?: string;
+}
 
 export interface DocumentToolContext {
 	chatId: string;
 	chatStore: ChatStore;
+	/** The target of an omitted documentId (the chat turn's pinned open
+	 *  document). Absent = the root. */
+	defaultDocumentId?: string;
+	/** Background-writer write scope (see DocumentToolScope). */
+	scope?: DocumentToolScope;
+	/** Progress line for the writer's activity row. */
+	onActivity?: (activity: string) => void;
 }
 
 /** Parallel document tool calls are allowed, but writes are serialized per
- *  session: read-modify-write must never see a half-applied sibling batch. */
-const documentQueues = new Map<string, Promise<unknown>>();
-function withDocumentLock<T>(chatId: string, work: () => Promise<T>): Promise<T> {
-	const previous = documentQueues.get(chatId) ?? Promise.resolve();
+ *  session: read-modify-write must never see a half-applied sibling batch.
+ *  Process-global (Next gives route entries their own module copies; the
+ *  chat turn and the background writers must share one queue). */
+function documentQueues(): Map<string, Promise<unknown>> {
+	const g = globalThis as typeof globalThis & { __lhStudyDocumentQueues?: Map<string, Promise<unknown>> };
+	return (g.__lhStudyDocumentQueues ??= new Map());
+}
+export function withDocumentLock<T>(chatId: string, work: () => Promise<T>): Promise<T> {
+	const queues = documentQueues();
+	const previous = queues.get(chatId) ?? Promise.resolve();
 	const run = previous.then(work, work);
 	const tail = run.then(() => undefined, () => undefined);
-	documentQueues.set(chatId, tail);
+	queues.set(chatId, tail);
 	void tail.finally(() => {
-		if (documentQueues.get(chatId) === tail) documentQueues.delete(chatId);
+		if (queues.get(chatId) === tail) queues.delete(chatId);
 	});
 	return run;
-}
-
-function noteGeneration(ctx: DocumentToolContext, phase: string, activity: string): void {
-	const record = ctx.chatStore.getChat(ctx.chatId);
-	noteReadGeneration(ctx.chatId, record?.title ?? "Reading session", phase, activity);
 }
 
 const topicSuggestion = Type.Object({
@@ -143,14 +165,14 @@ const sectionPatch = Type.Object({
 		Type.Array(topicSuggestion, {
 			maxItems: STUDY_SUGGESTIONS_MAX,
 			description:
-				"This chapter's 2–4 deeper directions, shown immediately in the reading pane. Include them whenever you write or substantially revise the section; omit on small edits to keep the existing directions. An empty array clears them. Roadmap-seeded chapters already carry all their subtopics — keep that list and use describe_subtopics for the overviews.",
+				"This chapter's 2–4 deeper directions, shown immediately in the reading pane. Include them whenever you write or substantially revise the section; omit on small edits to keep the existing directions. An empty array clears them. Roadmap subtopics on a seeded chapter are always kept; directions you send are added beside them.",
 		}),
 	),
 	questions: Type.Optional(
 		Type.Array(questionPatch, {
 			maxItems: STUDY_QUESTIONS_MAX,
 			description:
-				"This chapter's 1–3 self-check questions and answers, hidden in a collapsed accordion. Include them whenever you write or substantially revise the section; omit on small edits. An empty array clears them.",
+				"Replace this chapter's self-check questions (1–3 for a new chapter), hidden in a collapsed accordion. Include them whenever you write or substantially revise the section; omit on small edits. An empty array clears them. To ADD questions to an existing set, use add_questions instead.",
 		}),
 	),
 });
@@ -174,7 +196,7 @@ export const editDocumentInput = Type.Object({
 	documentId: Type.Optional(
 		Type.String({
 			description:
-				"Target document id. Omit to edit the document the learner is currently reading (the root when none). A deeper document must already exist; this tool never invents ids.",
+				"Target document id. Omit to edit the document the learner had open when this turn started (the root when none). A deeper document must already exist; this tool never invents ids.",
 		}),
 	),
 	title: Type.Optional(
@@ -215,7 +237,7 @@ export const editDocumentInput = Type.Object({
 export const readDocumentInput = Type.Object({
 	documentId: Type.Optional(
 		Type.String({
-			description: "Target document id; omit for the document the learner is reading (the root when none).",
+			description: "Target document id; omit for the document the learner had open when this turn started.",
 		}),
 	),
 	sectionId: Type.Optional(
@@ -228,24 +250,24 @@ export const readDocumentInput = Type.Object({
 export const suggestDeeperInput = Type.Object({
 	documentId: Type.Optional(
 		Type.String({
-			description: "Target document id; omit for the document the learner is reading.",
+			description: "Target document id; omit for the document the learner had open when this turn started.",
 		}),
 	),
 	sectionId: Type.String({
-		description: "The chapter id the learner pressed 'Go deeper' on.",
+		description: "The chapter whose deeper directions are being replaced.",
 	}),
 	suggestions: Type.Array(topicSuggestion, {
 		minItems: 1,
 		maxItems: STUDY_SUGGESTIONS_MAX,
 		description:
-			"2–4 genuinely deeper directions. Each is a short heading plus one line of what it covers. Point at an existing document when the topic is already written.",
+			"2–4 genuinely deeper directions. Each is a short heading plus one line of what it covers. Point at an existing document when the topic is already written. Roadmap subtopics on a seeded chapter are kept regardless.",
 	}),
 });
 
 export const describeSubtopicsInput = Type.Object({
 	documentId: Type.Optional(
 		Type.String({
-			description: "Target document id; omit for the document the learner is reading.",
+			description: "Target document id; omit for the document the learner had open when this turn started.",
 		}),
 	),
 	sectionId: Type.String({
@@ -261,10 +283,24 @@ export const describeSubtopicsInput = Type.Object({
 		}),
 		{
 			minItems: 1,
-			maxItems: 200,
-			description: "A batch of subtopic overviews. Parallel batches merge by id; titles and roadmap pointers stay untouched.",
+			maxItems: STUDY_SUGGESTIONS_MAX,
+			description: "A batch of subtopic overviews. Batches merge by id; titles and roadmap pointers stay untouched.",
 		},
 	),
+});
+
+export const addQuestionsInput = Type.Object({
+	documentId: Type.Optional(
+		Type.String({
+			description: "Target document id; omit for the document the learner had open when this turn started.",
+		}),
+	),
+	sectionId: Type.String({ description: "The chapter receiving the new questions." }),
+	questions: Type.Array(questionPatch, {
+		minItems: 1,
+		maxItems: STUDY_QUESTIONS_APPEND_MAX,
+		description: "Only the NEW questions (2–3 is usual), each with a new id. Existing questions are kept automatically.",
+	}),
 });
 
 export const listDocumentsInput = Type.Object({});
@@ -282,25 +318,35 @@ interface DocumentToolResult {
 	changed?: Array<{ id: string; heading: string }>;
 }
 
-function resolveTarget(record: ChatRecord, documentId?: string): { id: string; document: ReturnType<typeof studyDocumentById> } {
-	const id = documentId ?? record.readingDocumentId ?? STUDY_ROOT_DOCUMENT_ID;
-	return { id, document: studyDocumentById(record, id) };
+function targetId(ctx: DocumentToolContext, documentId?: string): string {
+	return documentId ?? ctx.scope?.documentId ?? ctx.defaultDocumentId ?? STUDY_ROOT_DOCUMENT_ID;
 }
 
-function unknownDocument(id: string, record: ChatRecord): string {
-	const ids = studyDocumentList(record).map((doc) => doc.id);
+function unknownDocument(id: string, docs: StudyDocumentSet): string {
+	const ids = studyDocumentList(docs).map((doc) => doc.id);
 	return ids.length > 0
 		? `No study document with id "${id}". Current ids: ${ids.join(", ")}`
 		: "No study document exists yet.";
 }
 
+/** A background writer may write only its assigned target. */
+function scopeProblem(ctx: DocumentToolContext, id: string, sectionId?: string): string | null {
+	const scope = ctx.scope;
+	if (!scope) return null;
+	if (id !== scope.documentId) return `This writer may only write document "${scope.documentId}", not "${id}".`;
+	if (scope.sectionId && sectionId !== undefined && sectionId !== scope.sectionId) {
+		return `This writer may only write section "${scope.sectionId}" of "${scope.documentId}", not "${sectionId}".`;
+	}
+	return null;
+}
+
 /** Related targets must exist in this session; the pure engine owns format
  *  and self-link validation. */
-function relatedTargetProblems(record: ChatRecord, links: readonly StudyRelatedLink[]): string[] {
+function relatedTargetProblems(docs: StudyDocumentSet, links: readonly StudyRelatedLink[]): string[] {
 	const problems: string[] = [];
 	for (const [i, link] of links.entries()) {
 		if (!link || typeof link.documentId !== "string") continue;
-		const target = studyDocumentById(record, link.documentId);
+		const target = studyDocumentById(docs, link.documentId);
 		if (!target) {
 			problems.push(`related[${i}]: no document with id "${link.documentId}"`);
 			continue;
@@ -312,11 +358,11 @@ function relatedTargetProblems(record: ChatRecord, links: readonly StudyRelatedL
 	return problems;
 }
 
-function suggestionTargetProblems(record: ChatRecord, suggestions: readonly StudyTopicSuggestion[]): string[] {
+function suggestionTargetProblems(docs: StudyDocumentSet, suggestions: readonly StudyTopicSuggestion[]): string[] {
 	const problems: string[] = [];
 	for (const [i, suggestion] of suggestions.entries()) {
 		if (!suggestion || typeof suggestion.documentId !== "string") continue;
-		const target = studyDocumentById(record, suggestion.documentId);
+		const target = studyDocumentById(docs, suggestion.documentId);
 		if (!target) {
 			problems.push(`suggestions[${i}]: no document with id "${suggestion.documentId}"`);
 			continue;
@@ -333,40 +379,40 @@ export function editDocumentTool(ctx: DocumentToolContext): AgentTool<typeof edi
 		name: EDIT_DOCUMENT_TOOL,
 		label: EDIT_DOCUMENT_TOOL,
 		description:
-			"Create or update one study document shown in the learner's reading pane. Omit documentId to edit the document the learner is reading (the root when none); pass documentId to edit a deeper document. Use `sections` to upsert by id (new sections need an id, heading, and body), `remove` to delete ids, `order` to set the full section order, `title` to name the document, and `related` to link related documents. Each section patch should also carry its 2–4 `suggestions` (deeper directions) and 1–3 `questions` (self-check question/answer pairs) whenever you write or substantially revise that section — the learner sees the directions immediately and the questions in a collapsed accordion. On a roadmap-seeded root, keep the existing roadmap subtopic suggestions instead of replacing them with invented directions; use describe_subtopics for their generated overviews. " +
+			"Create or update one study document shown in the learner's reading pane. Omit documentId to edit the document the learner had open when this turn started (the root when none); pass documentId to edit a deeper document. Use `sections` to upsert by id (new sections need an id, heading, and body), `remove` to delete ids, `order` to set the full section order, `title` to name the document, and `related` to link related documents. Each section patch should also carry its 2–4 `suggestions` (deeper directions) and 1–3 `questions` (self-check question/answer pairs) whenever you write or substantially revise that section. Roadmap subtopic suggestions on a seeded chapter are always kept. " +
 			"The first root edit must set the title. Section ids are permanent: choose a lowercase slug once and reuse it for revisions. Only change what the learner asked for; keep the rest of the document stable. " +
 			"The result returns the target's current table of contents. Use read_document before a large rewrite or whenever the current text is not in your context, and list_documents to see the whole tree.",
 		parameters: editDocumentInput,
 		executionMode: "parallel",
 		execute: serverExecute(EDIT_DOCUMENT_TOOL, editDocumentInput, (input) => withDocumentLock(ctx.chatId, async () => {
-			const record = ctx.chatStore.getChat(ctx.chatId);
-			if (!record) return { ok: false, error: `Chat not found: ${ctx.chatId}` } satisfies DocumentToolResult;
-			const { id, document } = resolveTarget(record, input.documentId);
+			const docs = ctx.chatStore.readDocuments(ctx.chatId);
+			const id = targetId(ctx, input.documentId);
+			const scoped = scopeProblem(ctx, id);
+			if (scoped) return { ok: false, error: scoped } satisfies DocumentToolResult;
+			if (ctx.scope?.sectionId) {
+				const outside = (input.sections ?? []).find((patch) => patch.id !== ctx.scope!.sectionId);
+				if (outside || input.remove || input.order || input.title !== undefined || input.related !== undefined) {
+					return {
+						ok: false,
+						error: `This writer may only patch section "${ctx.scope.sectionId}" (no title, remove, order or related changes).`,
+					} satisfies DocumentToolResult;
+				}
+			}
+			const document = studyDocumentById(docs, id);
 			if (!document && id !== STUDY_ROOT_DOCUMENT_ID) {
-				return { ok: false, error: unknownDocument(id, record) } satisfies DocumentToolResult;
+				return { ok: false, error: unknownDocument(id, docs) } satisfies DocumentToolResult;
 			}
 			if (input.related !== undefined) {
-				const problems = relatedTargetProblems(record, input.related);
+				const problems = relatedTargetProblems(docs, input.related);
+				if (problems.length > 0) return { ok: false, error: problems.join("\n") } satisfies DocumentToolResult;
+			}
+			const sentSuggestions = (input.sections ?? []).flatMap((patch) => patch.suggestions ?? []);
+			if (sentSuggestions.length > 0) {
+				const problems = suggestionTargetProblems(docs, sentSuggestions);
 				if (problems.length > 0) return { ok: false, error: problems.join("\n") } satisfies DocumentToolResult;
 			}
 			try {
 				const next = applyStudyDocumentEdit(document ?? undefined, input);
-				const patches = input.sections ?? [];
-				const names = patches
-					.map((patch) => next.sections.find((section) => section.id === patch.id)?.heading ?? patch.id)
-					.slice(0, 3)
-					.join(", ");
-				const questions = patches.some((patch) => patch.questions !== undefined);
-				const subtopics = patches.some((patch) => patch.suggestions !== undefined);
-				noteGeneration(
-					ctx,
-					questions ? "Generating questions" : subtopics ? "Generating subtopics" : "Writing the guide",
-					questions
-						? `Adding self-check questions${names ? ` · ${names}` : ""}`
-						: subtopics
-							? `Updating subtopics${names ? ` · ${names}` : ""}`
-							: `Writing summaries${names ? ` · ${names}` : ""}`,
-				);
 				ctx.chatStore.saveDocument(ctx.chatId, next);
 				// The pane's live update channel: a mid-turn write must reach
 				// the reading pane without touching the client's streaming
@@ -376,6 +422,7 @@ export function editDocumentTool(ctx: DocumentToolContext): AgentTool<typeof edi
 					const section = next.sections.find((s) => s.id === patch.id);
 					return { id: patch.id, heading: section?.heading ?? patch.heading ?? patch.id };
 				});
+				if (changed.length > 0) ctx.onActivity?.(`Wrote ${changed.slice(0, 3).map((c) => c.heading).join(", ")}`);
 				return {
 					ok: true,
 					documentId: next.id,
@@ -399,14 +446,23 @@ export function readDocumentTool(ctx: DocumentToolContext): AgentTool<typeof rea
 		name: READ_DOCUMENT_TOOL,
 		label: READ_DOCUMENT_TOOL,
 		description:
-			"Read one study document — the title and ordered sections, including its deeper suggestions and related links. Omit documentId for the document the learner is reading. Optionally pass `sectionId` to read just one section. For the whole tree of documents, use list_documents.",
+			"Read one study document — the title and ordered sections, including its deeper suggestions and related links. Omit documentId for the document the learner had open when this turn started. Optionally pass `sectionId` to read just one section. For the whole tree of documents, use list_documents.",
 		parameters: readDocumentInput,
 		executionMode: "parallel",
 		execute: serverExecute(READ_DOCUMENT_TOOL, readDocumentInput, async ({ documentId, sectionId }) => {
-			const record = ctx.chatStore.getChat(ctx.chatId);
-			if (!record) return { ok: false, error: `Chat not found: ${ctx.chatId}` };
-			const { id, document } = resolveTarget(record, documentId);
-			if (!document) return { ok: false, error: unknownDocument(id, record) };
+			const docs = ctx.chatStore.readDocuments(ctx.chatId);
+			const id = targetId(ctx, documentId);
+			const document = studyDocumentById(docs, id);
+			if (!document) return { ok: false, error: unknownDocument(id, docs) };
+			const head = {
+				ok: true,
+				documentId: document.id,
+				title: document.title,
+				revision: document.revision,
+				status: document.status ?? "ready",
+				parent: document.parent ?? null,
+				related: document.related ?? [],
+			};
 			if (sectionId !== undefined) {
 				const section = document.sections.find((s) => s.id === sectionId);
 				if (!section) {
@@ -415,27 +471,9 @@ export function readDocumentTool(ctx: DocumentToolContext): AgentTool<typeof rea
 						error: `No section with id "${sectionId}" in "${document.title}". Current ids: ${document.sections.map((s) => s.id).join(", ")}`,
 					};
 				}
-				return {
-					ok: true,
-					documentId: document.id,
-					title: document.title,
-					revision: document.revision,
-					status: document.status ?? "ready",
-					parent: document.parent ?? null,
-					related: document.related ?? [],
-					sections: [section],
-				};
+				return { ...head, sections: [section] };
 			}
-			return {
-				ok: true,
-				documentId: document.id,
-				title: document.title,
-				revision: document.revision,
-				status: document.status ?? "ready",
-				parent: document.parent ?? null,
-				related: document.related ?? [],
-				sections: document.sections,
-			};
+			return { ...head, sections: document.sections };
 		}),
 	};
 }
@@ -445,23 +483,24 @@ export function suggestDeeperTool(ctx: DocumentToolContext): AgentTool<typeof su
 		name: "suggest_deeper",
 		label: "suggest_deeper",
 		description:
-			"Store deeper-topic directions for one chapter of a study document. The learner pressed 'Go deeper' on that chapter; propose 2–4 directions that go one level deeper (a prerequisite, mechanism, consequence, comparison, or worked application), each with a short heading and one-line blurb. Do not write the child document here — the learner picks first. Point at an existing document when the topic is already written.",
+			"Replace one chapter's deeper-topic directions: 2–4 directions that go one level deeper (a prerequisite, mechanism, consequence, comparison, or worked application), each with a short heading and one-line blurb. Do not write the child document here — the learner picks first. Point at an existing document when the topic is already written.",
 		parameters: suggestDeeperInput,
 		executionMode: "parallel",
 		execute: serverExecute("suggest_deeper", suggestDeeperInput, (input) => withDocumentLock(ctx.chatId, async () => {
-			const record = ctx.chatStore.getChat(ctx.chatId);
-			if (!record) return { ok: false, error: `Chat not found: ${ctx.chatId}` };
-			const { id, document } = resolveTarget(record, input.documentId);
-			if (!document) return { ok: false, error: unknownDocument(id, record) };
-			const problems = suggestionTargetProblems(record, input.suggestions);
+			const docs = ctx.chatStore.readDocuments(ctx.chatId);
+			const id = targetId(ctx, input.documentId);
+			const scoped = scopeProblem(ctx, id, input.sectionId);
+			if (scoped) return { ok: false, error: scoped };
+			const document = studyDocumentById(docs, id);
+			if (!document) return { ok: false, error: unknownDocument(id, docs) };
+			const problems = suggestionTargetProblems(docs, input.suggestions);
 			if (problems.length > 0) return { ok: false, error: problems.join("\n") };
-			const targetSection = document.sections.find((section) => section.id === input.sectionId);
-			noteGeneration(ctx, "Thinking of directions", `Directions · ${targetSection?.heading ?? input.sectionId}`);
 			try {
 				const next = applyStudySuggestions(document, input.sectionId, input.suggestions);
 				ctx.chatStore.saveDocument(ctx.chatId, next);
 				emit("document-changed", { chatId: ctx.chatId, documentId: next.id });
 				const section = next.sections.find((s) => s.id === input.sectionId);
+				ctx.onActivity?.(`Directions · ${section?.heading ?? input.sectionId}`);
 				return {
 					ok: true,
 					documentId: next.id,
@@ -481,29 +520,62 @@ export function describeSubtopicsTool(ctx: DocumentToolContext): AgentTool<typeo
 		name: "describe_subtopics",
 		label: "describe_subtopics",
 		description:
-			"Write or update the one-line overviews of roadmap subtopics in one main-topic chapter. After a roadmap seed, every subtopic already exists as a suggestion; this tool fills in what each one covers and why it matters without changing its id, title or roadmap pointer. Call it in parallel batches when generating a whole roadmap.",
+			"Write or update the one-line overviews of roadmap subtopics in one main-topic chapter. After a roadmap seed, every subtopic already exists as a suggestion; this tool fills in what each one covers and why it matters without changing its id, title or roadmap pointer.",
 		parameters: describeSubtopicsInput,
 		executionMode: "parallel",
 		execute: serverExecute("describe_subtopics", describeSubtopicsInput, (input) => withDocumentLock(ctx.chatId, async () => {
-			const record = ctx.chatStore.getChat(ctx.chatId);
-			if (!record) return { ok: false, error: `Chat not found: ${ctx.chatId}` };
-			const { id, document } = resolveTarget(record, input.documentId);
-			if (!document) return { ok: false, error: unknownDocument(id, record) };
-			const section = document.sections.find((candidate) => candidate.id === input.sectionId);
-			noteGeneration(
-				ctx,
-				"Generating subtopics",
-				`Subtopic overviews · ${section?.heading ?? input.sectionId} (${input.subtopics.length})`,
-			);
+			const docs = ctx.chatStore.readDocuments(ctx.chatId);
+			const id = targetId(ctx, input.documentId);
+			const scoped = scopeProblem(ctx, id, input.sectionId);
+			if (scoped) return { ok: false, error: scoped };
+			const document = studyDocumentById(docs, id);
+			if (!document) return { ok: false, error: unknownDocument(id, docs) };
 			try {
 				const next = applyStudySubtopicBlurbs(document, input.sectionId, input.subtopics);
 				ctx.chatStore.saveDocument(ctx.chatId, next);
 				emit("document-changed", { chatId: ctx.chatId, documentId: next.id });
+				const section = next.sections.find((candidate) => candidate.id === input.sectionId);
+				ctx.onActivity?.(`Subtopic overviews · ${section?.heading ?? input.sectionId} (${input.subtopics.length})`);
 				return {
 					ok: true,
 					documentId: next.id,
 					sectionId: input.sectionId,
 					described: input.subtopics.length,
+				};
+			} catch (err) {
+				if (err instanceof StudyDocumentError) return { ok: false, error: err.message };
+				throw err;
+			}
+		})),
+	};
+}
+
+export function addQuestionsTool(ctx: DocumentToolContext): AgentTool<typeof addQuestionsInput> {
+	return {
+		name: "add_questions",
+		label: "add_questions",
+		description:
+			"Add new self-check questions (with model answers) to one chapter, keeping every existing question. Send only the new pairs with new ids; do not resend the old ones.",
+		parameters: addQuestionsInput,
+		executionMode: "parallel",
+		execute: serverExecute("add_questions", addQuestionsInput, (input) => withDocumentLock(ctx.chatId, async () => {
+			const docs = ctx.chatStore.readDocuments(ctx.chatId);
+			const id = targetId(ctx, input.documentId);
+			const scoped = scopeProblem(ctx, id, input.sectionId);
+			if (scoped) return { ok: false, error: scoped };
+			const document = studyDocumentById(docs, id);
+			if (!document) return { ok: false, error: unknownDocument(id, docs) };
+			try {
+				const next = applyStudyQuestionsAppend(document, input.sectionId, input.questions);
+				ctx.chatStore.saveDocument(ctx.chatId, next);
+				emit("document-changed", { chatId: ctx.chatId, documentId: next.id });
+				const section = next.sections.find((candidate) => candidate.id === input.sectionId);
+				ctx.onActivity?.(`Self-check questions · ${section?.heading ?? input.sectionId}`);
+				return {
+					ok: true,
+					documentId: next.id,
+					sectionId: input.sectionId,
+					questions: section?.questions?.length ?? 0,
 				};
 			} catch (err) {
 				if (err instanceof StudyDocumentError) return { ok: false, error: err.message };
@@ -522,12 +594,11 @@ export function listDocumentsTool(ctx: DocumentToolContext): AgentTool<typeof li
 		parameters: listDocumentsInput,
 		executionMode: "parallel",
 		execute: serverExecute("list_documents", listDocumentsInput, async () => {
-			const record = ctx.chatStore.getChat(ctx.chatId);
-			if (!record) return { ok: false, error: `Chat not found: ${ctx.chatId}` };
+			const docs = ctx.chatStore.readDocuments(ctx.chatId);
 			return {
 				ok: true,
-				tree: studyDocumentTreeText(record),
-				documents: studyDocumentList(record).map((doc) => ({
+				tree: studyDocumentTreeText(docs),
+				documents: studyDocumentList(docs).map((doc) => ({
 					id: doc.id,
 					title: doc.title,
 					status: doc.status ?? "ready",
@@ -540,12 +611,14 @@ export function listDocumentsTool(ctx: DocumentToolContext): AgentTool<typeof li
 	};
 }
 
+/** The chat turn's full document tool set. */
 export function documentTools(ctx: DocumentToolContext): Record<string, AgentTool<any>> {
 	return {
 		[EDIT_DOCUMENT_TOOL]: editDocumentTool(ctx),
 		[READ_DOCUMENT_TOOL]: readDocumentTool(ctx),
 		suggest_deeper: suggestDeeperTool(ctx),
 		describe_subtopics: describeSubtopicsTool(ctx),
+		add_questions: addQuestionsTool(ctx),
 		list_documents: listDocumentsTool(ctx),
 	};
 }

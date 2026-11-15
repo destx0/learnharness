@@ -1,22 +1,22 @@
 import { emit } from "../core/events.ts";
 
 /**
- * READ GENERATION ACTIVITY (2026-11-13).
+ * READ WRITER ACTIVITY (2026-11-13; one row per background writer since
+ * 2026-11-15).
  *
- * A roadmap-seeded read turn is a bulk generation pass: main-topic
- * summaries, subtopic overviews, self-check questions. It runs inside the
- * foreground session turn, so it is not a job — but the learner asked to
- * see "what is currently generating" in the Background agents strip. This
- * tiny registry is fed by the document tools and cleared at turn
- * settlement; the activity feed joins it like any other running process.
+ * Each background document writer (server/read-writers.ts) is one row in
+ * the sidebar's Background agents strip: the session title, a phase
+ * ("Queued" / "Writing"), and the exact work ("Deep dive · Signals",
+ * "Summary · Components"). The queue owns the rows — it notes a row when
+ * a writer is queued, moves it as the writer works, and clears it when
+ * the writer settles. The dock's END control aborts the writer.
  *
- * The title is the session title; the activity line names the exact work
- * (which sections / subtopics / questions). Cost is deliberately absent:
- * the turn's billed usage lands in the session ledger at settlement, not
- * as a live job estimate.
+ * Cost stays absent while running: the writer's billed usage lands in the
+ * session's usage ledger when it settles, not as a live estimate.
  */
 
 export interface ReadGenerationActivity {
+	/** Row id: `read:<writer task id>` — also the abort id. */
 	id: string;
 	chatId: string;
 	title: string;
@@ -37,13 +37,13 @@ function active(): Map<string, ReadGenerationActivity> {
 	return (g.__lhReadGenerations ??= new Map());
 }
 
-/** Start or update this chat's generation row. The first call fixes the
- *  start time; every later call only moves the activity/phase. */
-export function noteReadGeneration(chatId: string, title: string, phase: string, activity: string): void {
+/** Start or update one writer row. The first call fixes the start time;
+ *  later calls move only the phase/activity. */
+export function noteReadGeneration(rowId: string, chatId: string, title: string, phase: string, activity: string): void {
 	const now = Date.now();
-	const current = active().get(chatId);
-	active().set(chatId, {
-		id: `read:${chatId}`,
+	const current = active().get(rowId);
+	active().set(rowId, {
+		id: rowId,
 		chatId,
 		title,
 		phase,
@@ -54,9 +54,9 @@ export function noteReadGeneration(chatId: string, title: string, phase: string,
 	emit("activity-changed", {});
 }
 
-/** Turn settlement (or a failed start) removes the row. */
-export function finishReadGeneration(chatId: string): void {
-	if (active().delete(chatId)) emit("activity-changed", {});
+/** The writer settled (or was aborted): remove its row. */
+export function finishReadGeneration(rowId: string): void {
+	if (active().delete(rowId)) emit("activity-changed", {});
 }
 
 export function readGenerationActivities(): ReadGenerationActivity[] {

@@ -1,21 +1,20 @@
-import { finalizeReadDocuments, getChat, isTurnRunning, stores } from "@/src/server";
+import { finalizeReadDocuments, getChat, readPaneSnapshot, stores } from "@/src/server";
 
 /** The read pane's document read (read sessions, 2026-11-04; deeper tree
- *  2026-11-12). A tiny dedicated route on purpose: document-changed fires
- *  after every edit, and the pane needs the documents WITHOUT refetching
- *  the whole transcript (which the chat view owns and guards against
- *  mid-stream adoption). */
-export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+ *  2026-11-12; per-document files and writers 2026-11-15).
+ *
+ *  Returns every document as a SKELETON (structure, suggestions, question
+ *  prompts — no bodies or answers) plus the one document the pane shows in
+ *  full: `?documentId=` when given, else the learner's reading document.
+ *  `writers` is the session's background-writer state (queued, running,
+ *  recently failed) so the pane can show per-chapter writing and Retry.
+ *  document-changed fires after every write, so this stays small: a
+ *  500-document session never ships 500 bodies per refresh. */
+export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
 	const { id } = await params;
-	// Crash recovery: a child created "writing" when the process died has no
-	// turn left to settle it. A read with nothing running is the honest
-	// moment to mark it ready/failed, before the pane decides what to show.
-	if (!isTurnRunning(id)) finalizeReadDocuments(stores.chatStore, id, { staleOnly: true });
-	const chat = getChat(id);
-	if (!chat) return Response.json({ error: "Not found" }, { status: 404 });
-	return Response.json({
-		document: chat.document ?? null,
-		documents: chat.documents ?? [],
-		readingDocumentId: chat.readingDocumentId ?? null,
-	});
+	if (!getChat(id)) return Response.json({ error: "Not found" }, { status: 404 });
+	// Crash recovery: a child left "writing" by a dead process has no writer
+	// behind it; finalize it before the pane decides what to show.
+	finalizeReadDocuments(stores.chatStore, id);
+	return Response.json(readPaneSnapshot(id, new URL(req.url).searchParams.get("documentId")));
 }

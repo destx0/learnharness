@@ -80,7 +80,7 @@ Question tools validate and execute server-side, returning a synthetic terminati
 
 A matching successful `probe_done` result selects the teacher and queues a fresh-agent handoff. A bare/refused call does not. Planning begins at that seam; displayed teaching begins at the first node-tagged `quiz`/`explain`, not `plan_init`. The plan is a validated Mermaid DAG, replaceable through `plan_init`. Current/visited positions derive from tagged calls, not grades. Waiting for the learner's natural reply to the plan is prompt doctrine, not an acceptance transaction.
 
-Read (2026-11-04) is the third session kind. [`tools/document.ts`](../src/agent/tools/document.ts) writes a structured living study document onto `ChatRecord.document` through `ChatStore.saveDocument`; the reading pane refetches it on `document-changed`, separate from streaming transcript state. A clean document-tool result owes no continuation, so a turn ending on internal document work cannot wake a phantom turn after reload. Read sessions skip extraction.
+Read (2026-11-04) is the third session kind ([read-mode.md](read-mode.md)). [`tools/document.ts`](../src/agent/tools/document.ts) writes structured living study documents through `ChatStore.saveDocument`, one file per document beside the record (`chats/<id>.docs/`, record version 5); the reading pane refetches skeletons plus the open document on `document-changed`, separate from streaming transcript state. Clicks that need writing (deep dives, a roadmap topic's lazy summary, more questions, new directions) never start chat turns: [`read-writers.ts`](../src/server/read-writers.ts) queues parallel background writers (at most eight per session) on the session's own model, with document tools scoped to their target. A clean document-tool result owes no continuation. Read sessions skip extraction; a document can be sent to the graph explicitly ("Save to graph", the notes-import pipeline), and a chapter can open a Teach session carrying it as hidden context.
 
 Practice uses the same turn/persistence/recovery path, not a separate problem-set service. [`tools/practice.ts`](../src/agent/tools/practice.ts) commits a statement and solution with `problem`; `conclude` records the outcome and reveals that solution. A turn-scoped gate enforces one active problem. The post-conclusion pause is doctrine, not a terminating `conclude` result. Next adds an explicit marker. Practice outcomes are session evidence, not graph mastery; ordinary practice settlement skips extraction.
 
@@ -141,7 +141,7 @@ Deleting sources removes their graph contributions while preserving knowledge su
 
 [`graphSnapshot`](../src/core/graph.ts) derives the presentation without starting extraction. Single-premise arguments draw direct arrows; joint premises produce geometry junctions, not extra stored propositions. Clusters derive from birth-source provenance, not embeddings, Louvain, or LLM naming. Layout/render settings are server-persisted; camera state is device-local.
 
-Prober/practice graph tools require both graph and graph-tool switches; the teacher has no graph-reader registry. Explicit graph selections at session creation are a separate context path, not automatic semantic top-K injection.
+Prober/practice/read graph tools (and the read background writers') require both graph and graph-tool switches; the teacher has no graph-reader registry. Explicit graph selections at session creation are a separate context path, not automatic semantic top-K injection.
 
 Extraction is the construction writer, not the only mutation: source/session/node deletion, simplification, and position commits also write graph files. Deleting a proposition removes chains using it; preserving graph on session deletion retains provenance while removing extraction bookkeeping.
 
@@ -151,7 +151,8 @@ Extraction is the construction writer, not the only mutation: source/session/nod
 
 | Data | Files |
 | --- | --- |
-| Conversations, plans, usage, image snapshots, side questions, living study documents | `chats/*.json` |
+| Conversations, plans, usage, image snapshots, side questions | `chats/*.json` |
+| Living study documents (read sessions), one file per document | `chats/<id>.docs/*.json` |
 | Worker computation and delivery obligations | `jobs/*.json` |
 | Propositions, chains, checkpoints, coverage | `graph/{nodes,chains,sessions,coverage}.jsonl` |
 | Sources, organization, positions, render preferences | JSON maps under `graph/` |

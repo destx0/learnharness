@@ -105,6 +105,11 @@ export interface StudySection {
 	suggestions?: StudyTopicSuggestion[];
 	/** Suggested self-check questions and their model answers. */
 	questions?: StudySectionQuestion[];
+	/** A roadmap-seeded main topic whose summary is not written yet (lazy
+	 *  summaries). The body is a placeholder; the pane shows
+	 *  the subtopic list and asks a background writer for the summary when
+	 *  the learner opens the section. Any body write clears it. */
+	seed?: boolean;
 }
 
 export interface StudyDocument {
@@ -127,6 +132,34 @@ export interface StudyDocument {
 	status?: StudyDocumentStatus;
 }
 
+/** A session's study documents, root first by convention: the root in
+ *  `document`, every deeper document in `documents`. Since chat record
+ *  version 5 they live in per-document files beside the record
+ *  (ChatStore.readDocuments), not inside it; this shape is what the pure
+ *  tree helpers (core/study-document.ts) read. */
+export interface StudyDocumentSet {
+	document?: StudyDocument;
+	documents?: StudyDocument[];
+}
+
+/** What a background document writer is doing (read sessions;
+ *  server/read-writers.ts). The pane shows a chapter's
+ *  writing state and Retry from this. */
+export type StudyWriterKind = "summary" | "subtopics" | "deep-dive" | "questions" | "directions";
+export interface StudyWriterView {
+	id: string;
+	/** Task identity (kind + target): one task per key at a time. */
+	key: string;
+	kind: StudyWriterKind;
+	documentId: string;
+	sectionId?: string;
+	/** deep-dive: the suggestion the child came from. */
+	topicId?: string;
+	status: "queued" | "running" | "failed";
+	label: string;
+	error?: string;
+}
+
 /** The read agent's document tool names (single-sourced for the tool
  *  registry, the continuation fold, and the UI's artifact renderer). */
 export const EDIT_DOCUMENT_TOOL = "edit_document";
@@ -147,13 +180,13 @@ export interface ChatRecord {
 	kind?: ChatKind;
 	/** The session's plan tree, written by the native plan tools. */
 	tree?: PlanTree;
-	/** The living study document (read sessions) — written by the read
-	 *  agent's edit_document tool via saveDocument. Absent on teach and
-	 *  practice records. */
+	/** LEGACY (record versions 3–4): the living study document stored
+	 *  inline. Version 5 moved every document into its own file
+	 *  (data/chats/<id>.docs/<docId>.json); getChat migrates these fields
+	 *  out on first read. Read documents through ChatStore.readDocuments. */
 	document?: StudyDocument;
-	/** Deeper documents spawned from chapters of the living document
-	 *  (read sessions). The tree is derived from each document's parent
-	 *  link; the root stays in `document` for pre-deeper compatibility. */
+	/** LEGACY (record versions 3–4): inline deeper documents — see
+	 *  `document`. */
 	documents?: StudyDocument[];
 	/** The document the learner is currently reading. The floating chat
 	 *  steers this document; absent reads as the root. */
@@ -183,8 +216,9 @@ export interface ChatRecord {
 
 /** The chat record format this build writes and understands. Version 3
  *  adds the deeper-document tree (`documents` / `readingDocumentId`) and
- *  document suggestion/related state. */
-export const CURRENT_CHAT_VERSION = 4;
+ *  document suggestion/related state. Version 5 moves study documents out
+ *  of the record into per-document files. */
+export const CURRENT_CHAT_VERSION = 5;
 
 /** Per-session model and thinking choices for native conversation agents.
  * Each absent field falls back independently to the strong model slot; no

@@ -18,7 +18,7 @@ The reader should be able to read it cold. That is the whole standard.
 - The title names the subject plainly.
 - The first section orients: what this is, why it matters, and how the rest is organized — in prose, not a bulleted agenda.
 - The middle sections are the guide's body: the core ideas, each explained in the order the reader needs them.
-- The closing section is a map of what could be explored next. It is a direction, not a promise, and it is allowed to be short.
+- The closing section ties the ideas together. What to explore next lives in each chapter's deeper directions, not in a separate closing list.
 - Headings are short and informative. They are navigation, not summary paragraphs.
 - The body of a section does not repeat its own heading.
 

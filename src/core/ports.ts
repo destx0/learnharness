@@ -28,6 +28,7 @@ import type {
 	CoverageEntry,
 	SessionCheckpoint,
 	StudyDocument,
+	StudyDocumentSet,
 	SideChatThread,
 	TurnUsage,
 	NotesSource,
@@ -73,6 +74,11 @@ export interface ChatStore {
 	 *  tool calls this in execute; teach/practice sessions never do). A
 	 *  child document upserts into the session's deeper-document list. */
 	saveDocument(id: string, document: StudyDocument): void;
+	/** Every study document of a read session (root + deeper documents).
+	 *  Documents live beside the record, not in it (record version 5). */
+	readDocuments(id: string): StudyDocumentSet;
+	/** One study document by id, or null. */
+	getDocument(id: string, documentId: string): StudyDocument | null;
 	/** Remember which document the learner is reading; the floating chat
 	 *  steers that document. View state: does not bump updatedAt. */
 	saveReadingDocumentId(id: string, documentId: string): void;

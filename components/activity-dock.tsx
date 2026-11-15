@@ -455,7 +455,7 @@ function ActivityBlobRow({
 	const Icon = blob.process === "read" ? PenToolIcon : blob.process === "extraction" ? WaypointsIcon : (blob.jobKind && KIND_ICON[blob.jobKind]) || BotIcon;
 	const label =
 		blob.process === "read"
-			? "Guide writer"
+			? "Document writer"
 			: blob.process === "extraction"
 			? `Extraction — ${blob.phase ?? "running"}`
 			: blob.jobKind === "research"
@@ -500,19 +500,17 @@ function ActivityBlobRow({
 			{/* The explicit END always on the blob's face (SCOPE) — the popover
 			    is for DETAIL, not the control. A failed abort locks the button and
 			    says why; a succeeded one just makes the blob vanish on refresh. */}
-			{blob.process !== "read" && (
-				<button
-					type="button"
-					data-testid="activity-abort"
-					onClick={onAbort}
-					disabled={abortState !== undefined}
-					title={abortState === "failed" ? "Abort failed — try again" : "End this background process"}
-					aria-label={`End ${label} in ${blob.title}`}
-					className="absolute right-1 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground/70 transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
-				>
-					<SquareIcon className="size-3" />
-				</button>
-			)}
+			<button
+				type="button"
+				data-testid="activity-abort"
+				onClick={onAbort}
+				disabled={abortState !== undefined}
+				title={abortState === "failed" ? "Abort failed — try again" : "End this background process"}
+				aria-label={`End ${label} in ${blob.title}`}
+				className="absolute right-1 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground/70 transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+			>
+				<SquareIcon className="size-3" />
+			</button>
 
 			{detailOpen && (
 				<div

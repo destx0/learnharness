@@ -12,5 +12,6 @@ For current guidance, start with the [documentation index](../README.md), [archi
 | [Probe → teach split](probe-teach-split.md) | September agent/phase design and later amendments. |
 | [Pi engine swap](pi-engine-swap.md) | 2026-09-12 migration proposal; the current runtime has moved beyond its proposed wire/record design. |
 | [First release planning](release-0.3.md) | 2026-10-06 polish ideas and compatibility discussion, not a release runbook. |
+| [Read mode, 2026-11-04 → 11-13](read-mode-2026-11-13.md) | The append-only read-mode record before the 2026-11-15 audit (title-matched roadmaps, bulk opening, click turns, inline storage). |
 
 The substantive text is retained, with archive notices and navigation repairs. References to missing design notes or a private Obsidian vault are historical citations, not bundled documentation or permission to access private sources. Do not use archived cleanup/data-wipe instructions on current user profiles.
